@@ -1,0 +1,15 @@
+[Unit]
+Description=nano-approval lightweight approval platform
+After=network.target
+
+[Service]
+User=agentdev
+WorkingDirectory=/home/agentdev/nano-approval
+ExecStart=/home/agentdev/.local/node24/bin/node server.js
+Environment=PORT=3000
+Restart=on-failure
+RestartSec=3
+MemoryMax=200M
+
+[Install]
+WantedBy=multi-user.target
