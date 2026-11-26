@@ -1,0 +1,289 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>轻审批</title>
+<style>
+  :root { --primary:#2563eb; --bg:#f5f6f8; --card:#fff; --text:#1f2937; --muted:#6b7280; --danger:#dc2626; --ok:#16a34a; }
+  * { box-sizing:border-box; margin:0; padding:0; }
+  body { font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Helvetica Neue",sans-serif; background:var(--bg); color:var(--text); }
+  .page { max-width:520px; margin:0 auto; min-height:100vh; padding:16px 16px 80px; }
+  .card { background:var(--card); border-radius:12px; padding:16px; margin-bottom:12px; box-shadow:0 1px 2px rgba(0,0,0,.04); }
+  h1 { font-size:22px; margin-bottom:16px; }
+  .tabs { display:flex; background:var(--card); border-radius:12px; padding:4px; margin-bottom:12px; position:sticky; top:8px; z-index:5; box-shadow:0 1px 4px rgba(0,0,0,.08); }
+  .tab { flex:1; text-align:center; padding:10px 0; border-radius:9px; font-size:15px; color:var(--muted); cursor:pointer; }
+  .tab.active { background:var(--primary); color:#fff; font-weight:600; }
+  .item { display:flex; justify-content:space-between; align-items:center; padding:14px 0; border-bottom:1px solid #f0f0f0; cursor:pointer; }
+  .item:last-child { border-bottom:none; }
+  .item .title { font-weight:600; }
+  .item .sub { color:var(--muted); font-size:13px; margin-top:3px; }
+  .badge { font-size:12px; padding:2px 10px; border-radius:99px; background:#eef2ff; color:var(--primary); }
+  .badge.doing { background:#fff7ed; color:#ea580c; }
+  .badge.done { background:#f0fdf4; color:var(--ok); }
+  .badge.reject { background:#fef2f2; color:var(--danger); }
+  input,select,textarea { width:100%; padding:11px 12px; border:1px solid #d1d5db; border-radius:9px; font-size:16px; background:#fff; margin-top:5px; }
+  label.field { display:block; margin-bottom:14px; font-size:14px; color:var(--text); }
+  label.field .req { color:var(--danger); }
+  button.btn { width:100%; padding:13px; border:none; border-radius:10px; font-size:16px; font-weight:600; background:var(--primary); color:#fff; cursor:pointer; }
+  button.btn.ghost { background:#fff; color:var(--primary); border:1px solid var(--primary); }
+  button.btn.danger { background:var(--danger); }
+  button.btn + button.btn { margin-top:10px; }
+  .kv { display:flex; padding:9px 0; border-bottom:1px solid #f3f4f6; font-size:14px; }
+  .kv .k { width:110px; color:var(--muted); flex-shrink:0; }
+  .step { display:flex; gap:12px; padding:10px 0; }
+  .step .dot { width:10px; height:10px; border-radius:99px; margin-top:6px; flex-shrink:0; background:#d1d5db; }
+  .step.done .dot { background:var(--ok); }
+  .step.doing .dot { background:#ea580c; box-shadow:0 0 0 3px #ffedd5; }
+  .step .body { flex:1; border-bottom:1px solid #f3f4f6; padding-bottom:10px; }
+  .step .name { font-weight:600; font-size:14px; }
+  .step .meta { color:var(--muted); font-size:12px; margin-top:2px; }
+  .step .comment { margin-top:6px; background:#f9fafb; border-radius:8px; padding:8px 10px; font-size:13px; color:#374151; white-space:pre-wrap; }
+  .header { display:flex; justify-content:space-between; align-items:center; margin-bottom:14px; }
+  .header .who { color:var(--muted); font-size:13px; }
+  .empty { text-align:center; color:var(--muted); padding:40px 0; font-size:14px; }
+  textarea.config { font-family:ui-monospace,Menlo,monospace; font-size:12px; min-height:300px; }
+  .back { display:inline-block; color:var(--primary); font-size:14px; margin-bottom:10px; cursor:pointer; }
+  .toast { position:fixed; left:50%; transform:translateX(-50%); bottom:70px; background:rgba(17,24,39,.92); color:#fff; padding:10px 18px; border-radius:99px; font-size:14px; opacity:0; transition:opacity .25s; pointer-events:none; max-width:90vw; }
+  .toast.show { opacity:1; }
+</style>
+</head>
+<body>
+<div id="app" class="page"></div>
+<div id="toast" class="toast"></div>
+<script>
+const $ = sel => document.querySelector(sel)
+const app = $('#app')
+let me = null
+
+function toast(msg) {
+  const t = $('#toast'); t.textContent = msg; t.classList.add('show')
+  setTimeout(() => t.classList.remove('show'), 2600)
+}
+async function api(path, opts = {}) {
+  const res = await fetch(path, { headers: { 'Content-Type': 'application/json' }, ...opts, body: opts.body ? JSON.stringify(opts.body) : undefined })
+  const data = await res.json().catch(() => ({}))
+  if (!res.ok) throw new Error(data.error || ('HTTP ' + res.status))
+  return data
+}
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))
+
+// ── 登录页 ──
+function renderLogin() {
+  app.innerHTML = `
+    <div style="padding-top:18vh">
+      <h1 style="text-align:center">轻审批</h1>
+      <p style="text-align:center;color:var(--muted);margin-bottom:28px">姓名 + 手机号，登录即注册</p>
+      <div class="card">
+        <label class="field">姓名<span class="req">*</span><input id="f_name" placeholder="张三"></label>
+        <label class="field">手机号<span class="req">*</span><input id="f_phone" inputmode="numeric" maxlength="11" placeholder="13800000000"></label>
+        <button class="btn" id="btn_login">进入</button>
+      </div>
+    </div>`
+  $('#btn_login').onclick = async () => {
+    try {
+      me = await api('/api/login', { method: 'POST', body: { name: $('#f_name').value, phone: $('#f_phone').value } })
+      location.hash = '#home'
+    } catch (e) { toast(e.message) }
+  }
+}
+
+// ── 首页（发起 / 待办 / 已办 / 我的）──
+const TABS = [
+  { key: 'start', label: '发起' },
+  { key: 'todo', label: '待办' },
+  { key: 'done', label: '已办' },
+  { key: 'mine', label: '我的' },
+]
+let tab = 'start'
+
+async function renderHome() {
+  app.innerHTML = `
+    <div class="header">
+      <h1 style="margin:0">轻审批</h1>
+      <div><span class="who">${esc(me.name)}</span> · <a href="javascript:void 0" id="lnk_tpl">配置</a> · <a href="javascript:void 0" id="lnk_out">退出</a></div>
+    </div>
+    <div class="tabs">${TABS.map(t => `<div class="tab ${t.key === tab ? 'active' : ''}" data-tab="${t.key}">${t.label}</div>`).join('')}</div>
+    <div id="tab_body"><div class="empty">加载中…</div></div>`
+  document.querySelectorAll('.tab').forEach(el => el.onclick = () => { tab = el.dataset.tab; renderHome() })
+  $('#lnk_out').onclick = async () => { await api('/api/logout', { method: 'POST' }); me = null; renderLogin() }
+  $('#lnk_tpl').onclick = () => { location.hash = '#templates' }
+  try {
+    const body = $('#tab_body')
+    if (tab === 'start') {
+      const list = await api('/api/templates')
+      body.innerHTML = list.length ? `<div class="card">${list.map(t =>
+        `<div class="item" data-id="${t.id}"><div><div class="title">${esc(t.display_name)}</div><div class="sub">${t.form.length} 个表单项</div></div><span class="badge">发起</span></div>`).join('')}</div>`
+        : `<div class="empty">还没有模板，点右上角「配置」创建</div>`
+      body.querySelectorAll('.item').forEach(el => el.onclick = () => { location.hash = '#apply/' + el.dataset.id })
+    } else if (tab === 'todo') {
+      const rows = await api('/api/todo')
+      body.innerHTML = rows.length ? `<div class="card">${rows.map(r =>
+        `<div class="item" data-id="${r.processInstanceId}"><div><div class="title">${esc(r.processDefineDisplayName || r.displayName)}</div><div class="sub">${esc(r.displayName)} · 发起人 ${esc(r.instanceVariable ? displayNameOf(r) : '')}</div></div><span class="badge doing">待审批</span></div>`).join('')}</div>`
+        : `<div class="empty">没有待办，喝口水 🎉</div>`
+      body.querySelectorAll('.item').forEach(el => el.onclick = () => { location.hash = '#detail/' + el.dataset.id })
+    } else if (tab === 'done') {
+      const rows = await api('/api/done')
+      body.innerHTML = rows.length ? `<div class="card">${rows.map(r =>
+        `<div class="item" data-id="${r.processInstanceId}"><div><div class="title">${esc(r.processDefineDisplayName || r.displayName)}</div><div class="sub">${esc(r.displayName)}</div></div><span class="badge done">已办</span></div>`).join('')}</div>`
+        : `<div class="empty">暂无已办记录</div>`
+      body.querySelectorAll('.item').forEach(el => el.onclick = () => { location.hash = '#detail/' + el.dataset.id })
+    } else {
+      const rows = await api('/api/my-instances')
+      const stateText = { 10:'进行中', 20:'已通过', 30:'已撤回', 40:'已终止', 45:'已拒绝', 99:'已废弃' }
+      const cls = s => s === 20 ? 'done' : s === 45 ? 'reject' : s === 10 ? 'doing' : ''
+      body.innerHTML = rows.length ? `<div class="card">${rows.map(r =>
+        `<div class="item" data-id="${r.id}"><div><div class="title">${esc(r.defineDisplayName || r.id)}</div><div class="sub">${fmtTime(r.createTime)}</div></div><span class="badge ${cls(r.state)}">${stateText[r.state] || r.state}</span></div>`).join('')}</div>`
+        : `<div class="empty">还没有发起过申请</div>`
+      body.querySelectorAll('.item').forEach(el => el.onclick = () => { location.hash = '#detail/' + el.dataset.id })
+    }
+  } catch (e) { $('#tab_body').innerHTML = `<div class="empty">${esc(e.message)}</div>` }
+}
+function displayNameOf(taskRow) {
+  try { const v = JSON.parse(taskRow.instanceVariable || '{}'); return v.u_initiator_realName || v.u_realName || taskRow.operator || '' } catch { return taskRow.operator || '' }
+}
+function fmtTime(s) {
+  if (!s) return ''
+  const d = new Date(s)
+  return isNaN(d) ? String(s) : `${d.getMonth() + 1}-${d.getDate()} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
+}
+
+// ── 发起申请（按模板 form 渲染动态表单）──
+async function renderApply(templateId) {
+  const tpl = await api('/api/templates/' + templateId)
+  const fieldHtml = tpl.form.map(f => {
+    if (f.type === 'select') {
+      return `<label class="field">${esc(f.label)}${f.required ? '<span class="req">*</span>' : ''}<select id="v_${f.key}">
+        <option value="">请选择</option>${(f.options || []).map(o => `<option value="${esc(o)}">${esc(o)}</option>`).join('')}</select></label>`
+    }
+    if (f.type === 'textarea') {
+      return `<label class="field">${esc(f.label)}${f.required ? '<span class="req">*</span>' : ''}<textarea id="v_${f.key}" rows="3"></textarea></label>`
+    }
+    return `<label class="field">${esc(f.label)}${f.required ? '<span class="req">*</span>' : ''}<input id="v_${f.key}" type="${f.type === 'number' ? 'number' : 'text'}"></label>`
+  }).join('')
+  app.innerHTML = `
+    <a class="back" href="javascript:history.back()">← 返回</a>
+    <h1>${esc(tpl.display_name)}</h1>
+    <div class="card">${fieldHtml || '<div class="empty">该模板没有表单项</div>'}</div>
+    <button class="btn" id="btn_submit">提交申请</button>`
+  $('#btn_submit').onclick = async () => {
+    const values = {}
+    tpl.form.forEach(f => { values[f.key] = $('#v_' + f.key).value })
+    try {
+      const { instanceId } = await api('/api/instances', { method: 'POST', body: { templateId, values } })
+      toast('已提交')
+      location.hash = '#detail/' + instanceId
+    } catch (e) { toast(e.message) }
+  }
+}
+
+// ── 实例详情 + 审批操作 ──
+async function renderDetail(instanceId) {
+  const d = await api('/api/instances/' + instanceId)
+  const myTask = d.doing.find(t => (t.actorIds || []).includes(me.phone))
+  const formValues = (d.form || []).map(f =>
+    `<div class="kv"><span class="k">${esc(f.label)}</span><span>${esc(d.variables?.[f.key] ?? '—')}</span></div>`).join('')
+  const steps = [...d.history, ...d.doing].map(t => {
+    const isDone = t.taskState === 20
+    const actorNames = t.actorNames || (t.actorIds || []).join('、') || t.operator
+    return `<div class="step ${isDone ? 'done' : 'doing'}">
+      <div class="dot"></div>
+      <div class="body">
+        <div class="name">${esc(t.displayName || t.taskName)} · ${esc(actorNames)}</div>
+        <div class="meta">${isDone ? '已完成 ' + fmtTime(t.finishTime) : '等待处理'}</div>
+        ${t.comment ? `<div class="comment">${esc(t.comment)}</div>` : ''}
+      </div></div>`
+  }).join('')
+  app.innerHTML = `
+    <a class="back" href="#home">← 返回</a>
+    <h1>${esc(d.id)} <span class="badge ${d.state === 20 ? 'done' : d.state === 45 ? 'reject' : 'doing'}">${d.stateText}</span></h1>
+    <div class="card">${formValues}</div>
+    <div class="card"><h3 style="font-size:15px;margin-bottom:8px">流程</h3>${steps}</div>
+    ${myTask ? `<div class="card">
+      <label class="field">审批意见<textarea id="f_comment" rows="2" placeholder="同意 / 不同意的原因"></textarea></label>
+      <button class="btn" id="btn_agree">同意</button>
+      <button class="btn danger" id="btn_reject">拒绝</button>
+    </div>` : ''}`
+  if (myTask) {
+    const act = async (path) => {
+      try {
+        await api(path, { method: 'POST', body: { comment: $('#f_comment').value } })
+        toast('已处理')
+        renderDetail(instanceId)
+      } catch (e) { toast(e.message) }
+    }
+    $('#btn_agree').onclick = () => act(`/api/tasks/${myTask.id}/agree`)
+    $('#btn_reject').onclick = () => act(`/api/tasks/${myTask.id}/reject`)
+  }
+}
+
+// ── 模板配置（V1 手动 JSON；V2 由一句话生成）──
+const EXAMPLE = {
+  name: "leave",
+  displayName: "请假审批",
+  form: [
+    { key: "days", label: "请假天数", type: "number", required: true },
+    { key: "reason", label: "事由", type: "textarea", required: true }
+  ],
+  flow: {
+    nodes: [
+      { id: "start", type: "snaker:start", x: 100, y: 200, properties: {}, text: { value: "开始" } },
+      { id: "apply", type: "snaker:task", x: 200, y: 200, properties: { assignee: "applicant" }, text: { value: "发起申请" } },
+      { id: "approve", type: "snaker:task", x: 300, y: 200, properties: { assignee: "13800000002" }, text: { value: "主管审批" } },
+      { id: "end", type: "snaker:end", x: 400, y: 200, properties: {}, text: { value: "结束" } }
+    ],
+    edges: [
+      { id: "e1", sourceNodeId: "start", targetNodeId: "apply", properties: {} },
+      { id: "e2", sourceNodeId: "apply", targetNodeId: "approve", properties: {} },
+      { id: "e3", sourceNodeId: "approve", targetNodeId: "end", properties: {} }
+    ]
+  }
+}
+
+async function renderTemplates() {
+  const list = await api('/api/templates')
+  app.innerHTML = `
+    <a class="back" href="#home">← 返回</a>
+    <h1>模板配置</h1>
+    <div class="card">${list.map(t =>
+      `<div class="item" data-id="${t.id}"><div><div class="title">${esc(t.display_name)}</div><div class="sub">${esc(t.name)}</div></div><span class="badge">编辑</span></div>`).join('') || '<div class="empty">暂无模板</div>'}</div>
+    <div class="card">
+      <h3 style="font-size:15px;margin-bottom:8px">新建 / 更新（JSON）</h3>
+      <p style="font-size:12px;color:var(--muted);margin-bottom:8px">assignee 填审批人手机号（写死）或变量名；AI 节点：type 用 snaker:custom、clazz 用 ai_review。</p>
+      <textarea class="config" id="f_config"></textarea>
+      <button class="btn" id="btn_save" style="margin-top:10px">保存模板</button>
+    </div>`
+  $('#f_config').value = JSON.stringify(EXAMPLE, null, 2)
+  document.querySelectorAll('.item').forEach(el => el.onclick = async () => {
+    const tpl = await api('/api/templates/' + el.dataset.id)
+    $('#f_config').value = JSON.stringify({ name: tpl.name, displayName: tpl.display_name, form: tpl.form, flow: tpl.flow }, null, 2)
+    window.scrollTo(0, document.body.scrollHeight)
+  })
+  $('#btn_save').onclick = async () => {
+    try {
+      let cfg = JSON.parse($('#f_config').value)
+      await api('/api/templates', { method: 'POST', body: cfg })
+      toast('已保存')
+      renderTemplates()
+    } catch (e) { toast(e.message) }
+  }
+}
+
+// ── 路由 ──
+async function route() {
+  if (!me) {
+    try { me = await api('/api/me') } catch { return renderLogin() }
+  }
+  const hash = (location.hash || '#home').replace(/^#/, '')
+  const [page, param] = hash.split('/')
+  if (page === 'apply' && param) return renderApply(param).catch(showErr)
+  if (page === 'detail' && param) return renderDetail(param).catch(showErr)
+  if (page === 'templates') return renderTemplates().catch(showErr)
+  tab = 'start'; renderHome()
+}
+function showErr(e) { app.innerHTML = `<div class="empty">${esc(e.message)}</div>` }
+window.addEventListener('hashchange', route)
+route()
+</script>
+</body>
+</html>
