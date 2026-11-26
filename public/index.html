@@ -248,6 +248,12 @@ async function renderTemplates() {
     <div class="card">${list.map(t =>
       `<div class="item" data-id="${t.id}"><div><div class="title">${esc(t.display_name)}</div><div class="sub">${esc(t.name)}</div></div><span class="badge">编辑</span></div>`).join('') || '<div class="empty">暂无模板</div>'}</div>
     <div class="card">
+      <h3 style="font-size:15px;margin-bottom:8px">AI 一句话生成</h3>
+      <p style="font-size:12px;color:var(--muted);margin-bottom:8px">描述你要的审批（如：出差报销，先部门主管审，再财务审），生成后请检查 assignee 手机号再保存。</p>
+      <input id="f_sentence" placeholder="一句话描述审批流程">
+      <button class="btn ghost" id="btn_gen" style="margin-top:10px">生成模板</button>
+    </div>
+    <div class="card">
       <h3 style="font-size:15px;margin-bottom:8px">新建 / 更新（JSON）</h3>
       <p style="font-size:12px;color:var(--muted);margin-bottom:8px">assignee 填审批人手机号（写死）或变量名；AI 节点：type 用 snaker:custom、clazz 用 ai_review。</p>
       <textarea class="config" id="f_config"></textarea>
@@ -259,6 +265,22 @@ async function renderTemplates() {
     $('#f_config').value = JSON.stringify({ name: tpl.name, displayName: tpl.display_name, form: tpl.form, flow: tpl.flow }, null, 2)
     window.scrollTo(0, document.body.scrollHeight)
   })
+  $('#btn_gen').onclick = async () => {
+    const sentence = $('#f_sentence').value.trim()
+    if (!sentence) return toast('先输入一句话描述')
+    const btn = $('#btn_gen')
+    btn.textContent = '生成中…（最长约 1 分钟）'
+    btn.disabled = true
+    try {
+      const { config } = await api('/api/ai/generate-template', { method: 'POST', body: { sentence } })
+      $('#f_config').value = JSON.stringify(config, null, 2)
+      toast('已生成，请检查 assignee 后保存')
+      $('#f_config').scrollIntoView({ behavior: 'smooth' })
+    } catch (e) { toast(e.message) } finally {
+      btn.textContent = '生成模板'
+      btn.disabled = false
+    }
+  }
   $('#btn_save').onclick = async () => {
     try {
       let cfg = JSON.parse($('#f_config').value)

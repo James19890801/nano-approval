@@ -7,6 +7,7 @@ import {
   deployTemplate, startInstance, agree, reject,
   listTodo, listDone, listMyInstances, instanceDetail,
 } from './src/engine.js'
+import { generateTemplate, qcaConfigured } from './src/qca/index.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const app = express()
@@ -68,6 +69,18 @@ app.get('/api/users', requireLogin, (req, res) => {
 })
 
 // ── 模板：一份 JSON 同时描述表单与流程 ──────────────────────────────────────
+app.post('/api/ai/generate-template', requireLogin, async (req, res) => {
+  const sentence = String(req.body.sentence || '').trim()
+  if (!sentence) return res.status(400).json({ error: '请描述你要的审批流程' })
+  if (!qcaConfigured()) return res.status(503).json({ error: 'QCA 未配置：复制 qca.env.example 为 data/qca.env 并填入 QODER_PAT' })
+  try {
+    const config = await generateTemplate(sentence)
+    res.json({ config })
+  } catch (err) {
+    res.status(502).json({ error: String(err.message || err).slice(0, 300) })
+  }
+})
+
 function tplFromConfig(config, createdBy) {
   const { name, displayName, form, flow } = config
   if (!name || !displayName || !Array.isArray(form) || !flow || !Array.isArray(flow.nodes)) {

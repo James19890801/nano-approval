@@ -107,6 +107,12 @@ CREATE TABLE IF NOT EXISTS ai_notes (
   text TEXT NOT NULL,
   created_at TEXT
 );
+CREATE TABLE IF NOT EXISTS qca_bindings (
+  lock_key TEXT PRIMARY KEY,
+  state_json TEXT NOT NULL,
+  token TEXT,
+  updated_at TEXT
+);
 `)
 
 export const q = {

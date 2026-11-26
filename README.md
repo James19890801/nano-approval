@@ -62,10 +62,20 @@ public/index.html     # 移动端 H5（单文件，无构建步骤）
 seed.js               # 演示数据
 ```
 
-## 接入 AI（V2 路线）
+## AI 一句话生成模板（QCA）
 
-1. **AI 初审节点**：替换 `src/engine.js` 里 `ai_review` 处理器的占位实现为 LLM 调用（入参已含完整表单变量）
-2. **一句话建模板**：把用户输入的一句话交给 LLM 生成上面的模板 JSON，直接 `POST /api/templates`
+配置页输入一句话（如「采购申请，先主管审再财务审」），由 [Qoder Cloud Agents](https://docs.qoder.com/zh/cloud-agents/overview) 生成模板 JSON，人工确认 assignee 手机号后保存。首次调用自动创建 Environment/Agent（幂等，重启不重复建）。
+
+```bash
+cp qca.env.example data/qca.env   # 填入你的 QODER PAT（qoder.com 控制台 → 设置 → 个人访问令牌）
+npm start
+```
+
+`data/` 已被 .gitignore 排除，PAT 不会进入仓库。
+
+## 接入 AI（下一步路线）
+
+1. **AI 初审节点**：替换 `src/engine.js` 里 `ai_review` 处理器的占位实现为 QCA 调用（入参已含完整表单变量）
 
 ## License
 
