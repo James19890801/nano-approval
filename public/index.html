@@ -5,56 +5,62 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>轻审批</title>
 <style>
-  :root { --primary:#2563eb; --bg:#f5f6f8; --card:#fff; --text:#1f2937; --muted:#6b7280; --danger:#dc2626; --ok:#16a34a; }
-  * { box-sizing:border-box; margin:0; padding:0; }
+  :root { --primary:#4f46e5; --primary-grad:linear-gradient(135deg,#4f46e5 0%,#7c3aed 100%); --bg:#f4f5fa; --card:#fff; --text:#1a1d29; --muted:#6b7280; --danger:#e11d48; --ok:#059669; --line:#e8eaf2; }
+  * { box-sizing:border-box; margin:0; padding:0; -webkit-tap-highlight-color:transparent; }
   body { font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Helvetica Neue",sans-serif; background:var(--bg); color:var(--text); }
   .page { max-width:520px; margin:0 auto; min-height:100vh; padding:16px 16px 80px; }
-  .card { background:var(--card); border-radius:12px; padding:16px; margin-bottom:12px; box-shadow:0 1px 2px rgba(0,0,0,.04); }
-  h1 { font-size:22px; margin-bottom:16px; }
-  .tabs { display:flex; background:var(--card); border-radius:12px; padding:4px; margin-bottom:12px; position:sticky; top:8px; z-index:5; box-shadow:0 1px 4px rgba(0,0,0,.08); }
-  .tab { flex:1; text-align:center; padding:10px 0; border-radius:9px; font-size:15px; color:var(--muted); cursor:pointer; }
-  .tab.active { background:var(--primary); color:#fff; font-weight:600; }
-  .item { display:flex; justify-content:space-between; align-items:center; padding:14px 0; border-bottom:1px solid #f0f0f0; cursor:pointer; }
+  .card { background:var(--card); border-radius:16px; padding:16px; margin-bottom:12px; box-shadow:0 1px 3px rgba(26,29,41,.05),0 4px 16px rgba(26,29,41,.04); border:1px solid var(--line); }
+  h1 { font-size:22px; margin-bottom:16px; letter-spacing:-.02em; }
+  .tabs { display:flex; background:var(--card); border-radius:14px; padding:4px; margin-bottom:12px; position:sticky; top:8px; z-index:5; box-shadow:0 2px 10px rgba(26,29,41,.08); border:1px solid var(--line); }
+  .tab { flex:1; text-align:center; padding:10px 0; border-radius:10px; font-size:14px; color:var(--muted); cursor:pointer; font-weight:500; transition:.15s; }
+  .tab.active { background:var(--primary-grad); color:#fff; font-weight:700; box-shadow:0 2px 8px rgba(79,70,229,.35); }
+  .tab .redot { display:inline-block; width:8px; height:8px; border-radius:99px; background:#fb7185; margin-left:4px; vertical-align:2px; }
+  .item { display:flex; justify-content:space-between; align-items:center; padding:14px 0; border-bottom:1px solid #f2f3f8; cursor:pointer; }
   .item:last-child { border-bottom:none; }
-  .item .title { font-weight:600; }
-  .item .sub { color:var(--muted); font-size:13px; margin-top:3px; }
-  .badge { font-size:12px; padding:2px 10px; border-radius:99px; background:#eef2ff; color:var(--primary); }
-  .badge.doing { background:#fff7ed; color:#ea580c; }
-  .badge.done { background:#f0fdf4; color:var(--ok); }
-  .badge.reject { background:#fef2f2; color:var(--danger); }
-  input,select,textarea { width:100%; padding:11px 12px; border:1px solid #d1d5db; border-radius:9px; font-size:16px; background:#fff; margin-top:5px; }
-  label.field { display:block; margin-bottom:14px; font-size:14px; color:var(--text); }
+  .item:active { opacity:.7; }
+  .item .title { font-weight:600; font-size:15px; }
+  .item .sub { color:var(--muted); font-size:12.5px; margin-top:3px; }
+  .badge { font-size:12px; padding:3px 10px; border-radius:99px; background:#eef0fe; color:var(--primary); font-weight:600; }
+  .badge.doing { background:#fff1e6; color:#ea580c; }
+  .badge.done { background:#ecfdf5; color:var(--ok); }
+  .badge.reject { background:#fff1f2; color:var(--danger); }
+  input,select,textarea { width:100%; padding:12px 14px; border:1.5px solid var(--line); border-radius:12px; font-size:16px; background:#fff; margin-top:5px; transition:border-color .15s; }
+  input:focus,select:focus,textarea:focus { outline:none; border-color:var(--primary); }
+  label.field { display:block; margin-bottom:14px; font-size:13.5px; color:var(--text); font-weight:500; }
   label.field .req { color:var(--danger); }
-  button.btn { width:100%; padding:13px; border:none; border-radius:10px; font-size:16px; font-weight:600; background:var(--primary); color:#fff; cursor:pointer; }
-  button.btn.ghost { background:#fff; color:var(--primary); border:1px solid var(--primary); }
-  button.btn.danger { background:var(--danger); }
+  button.btn { width:100%; padding:13px; border:none; border-radius:13px; font-size:16px; font-weight:700; background:var(--primary-grad); color:#fff; cursor:pointer; box-shadow:0 4px 12px rgba(79,70,229,.3); }
+  button.btn:active { transform:translateY(1px); }
+  button.btn.ghost { background:#fff; color:var(--primary); border:1.5px solid var(--primary); box-shadow:none; }
+  button.btn.danger { background:var(--danger); box-shadow:0 4px 12px rgba(225,29,72,.25); }
   button.btn + button.btn { margin-top:10px; }
-  .kv { display:flex; padding:9px 0; border-bottom:1px solid #f3f4f6; font-size:14px; }
+  .kv { display:flex; padding:10px 0; border-bottom:1px solid #f4f5fa; font-size:14px; }
   .kv .k { width:110px; color:var(--muted); flex-shrink:0; }
   .step { display:flex; gap:12px; padding:10px 0; }
-  .step .dot { width:10px; height:10px; border-radius:99px; margin-top:6px; flex-shrink:0; background:#d1d5db; }
+  .step .dot { width:10px; height:10px; border-radius:99px; margin-top:6px; flex-shrink:0; background:#d7dae3; }
   .step.done .dot { background:var(--ok); }
-  .step.doing .dot { background:#ea580c; box-shadow:0 0 0 3px #ffedd5; }
-  .step .body { flex:1; border-bottom:1px solid #f3f4f6; padding-bottom:10px; }
+  .step.doing .dot { background:#f59e0b; box-shadow:0 0 0 3px #fef3c7; }
+  .step .body { flex:1; border-bottom:1px dashed #eceef4; padding-bottom:10px; }
   .step .name { font-weight:600; font-size:14px; }
   .step .meta { color:var(--muted); font-size:12px; margin-top:2px; }
-  .step .comment { margin-top:6px; background:#f9fafb; border-radius:8px; padding:8px 10px; font-size:13px; color:#374151; white-space:pre-wrap; }
+  .step .comment { margin-top:6px; background:#f7f8fc; border-radius:10px; padding:9px 11px; font-size:13px; color:#3b3f51; white-space:pre-wrap; }
   .header { display:flex; justify-content:space-between; align-items:center; margin-bottom:14px; }
+  .header h1 { margin:0; font-size:24px; background:var(--primary-grad); -webkit-background-clip:text; background-clip:text; color:transparent; }
   .header .who { color:var(--muted); font-size:13px; }
-  .empty { text-align:center; color:var(--muted); padding:40px 0; font-size:14px; }
+  .header a { color:var(--primary); text-decoration:none; font-size:13px; font-weight:600; }
+  .empty { text-align:center; color:var(--muted); padding:44px 0; font-size:14px; }
+  .back { display:inline-block; color:var(--primary); font-size:14px; margin-bottom:10px; cursor:pointer; text-decoration:none; font-weight:600; }
   textarea.config { font-family:ui-monospace,Menlo,monospace; font-size:12px; min-height:300px; }
-  .back { display:inline-block; color:var(--primary); font-size:14px; margin-bottom:10px; cursor:pointer; }
-  .toast { position:fixed; left:50%; transform:translateX(-50%); bottom:70px; background:rgba(17,24,39,.92); color:#fff; padding:10px 18px; border-radius:99px; font-size:14px; opacity:0; transition:opacity .25s; pointer-events:none; max-width:90vw; }
+  .toast { position:fixed; left:50%; transform:translateX(-50%); bottom:70px; background:rgba(26,29,41,.93); color:#fff; padding:10px 20px; border-radius:99px; font-size:14px; opacity:0; transition:opacity .25s; pointer-events:none; max-width:90vw; z-index:50; }
   .toast.show { opacity:1; }
-  #backdrop { position:fixed; inset:0; background:rgba(0,0,0,.35); opacity:0; pointer-events:none; transition:opacity .25s; z-index:40; }
+  #backdrop { position:fixed; inset:0; background:rgba(15,17,26,.4); opacity:0; pointer-events:none; transition:opacity .25s; z-index:40; }
   #backdrop.show { opacity:1; pointer-events:auto; }
-  #sidebar { position:fixed; top:0; right:0; bottom:0; width:min(92vw,380px); background:#fff; z-index:41; transform:translateX(100%); transition:transform .25s; padding:18px 16px 32px; overflow-y:auto; box-shadow:-6px 0 24px rgba(0,0,0,.12); }
+  #sidebar { position:fixed; top:0; right:0; bottom:0; width:min(92vw,380px); background:#fff; z-index:41; transform:translateX(100%); transition:transform .25s; padding:18px 16px 32px; overflow-y:auto; box-shadow:-8px 0 30px rgba(0,0,0,.15); }
   #sidebar.open { transform:none; }
   .step.agent-step { cursor:pointer; }
   .step.agent-step:hover .name { color:var(--primary); }
   .decision-badge { display:inline-block; font-size:12px; padding:1px 8px; border-radius:6px; margin-left:6px; }
-  .decision-badge.pass { background:#f0fdf4; color:var(--ok); }
-  .decision-badge.reject { background:#fef2f2; color:var(--danger); }
+  .decision-badge.pass { background:#ecfdf5; color:var(--ok); }
+  .decision-badge.reject { background:#fff1f2; color:var(--danger); }
 </style>
 </head>
 <body>
@@ -403,50 +409,13 @@ async function renderAgentsTab(body) {
 async function renderFlowsTab(body) {
   const list = await api('/api/templates')
   body.innerHTML = `
-    <div class="card">${list.map(t =>
-      `<div class="item" data-id="${t.id}"><div><div class="title">${esc(t.display_name)}${t.created_by === me.phone ? ' <span class="badge">我的</span>' : ''}</div><div class="sub">${esc(t.name)} · ${t.form.length} 个表单项</div></div><span class="badge">编辑</span></div>`).join('') || '<div class="empty">暂无模板</div>'}</div>
-    <div class="card">
-      <h3 style="font-size:15px;margin-bottom:8px">AI 一句话生成</h3>
-      <p style="font-size:12px;color:var(--muted);margin-bottom:8px">描述你要的审批（如：出差报销，先部门主管审，再财务审），你配置的智能体会被自动匹配插入。生成后请检查 assignee 手机号再保存。</p>
-      <input id="f_sentence" placeholder="一句话描述审批流程">
-      <button class="btn ghost" id="btn_gen" style="margin-top:10px">生成模板</button>
+    <div class="card" style="display:flex;gap:10px">
+      <button class="btn" style="flex:1" onclick="location='/editor.html'">＋ 可视化新建流程（拖拽画布）</button>
     </div>
-    <div class="card">
-      <h3 style="font-size:15px;margin-bottom:8px">新建 / 更新（JSON）</h3>
-      <p style="font-size:12px;color:var(--muted);margin-bottom:8px">assignee 填审批人手机号（写死）或变量名；智能体节点：type 用 snaker:custom、clazz 用 qca_agent、agentId 填管理页里的智能体 id。</p>
-      <textarea class="config" id="f_config"></textarea>
-      <button class="btn" id="btn_save" style="margin-top:10px">保存模板</button>
-    </div>`
-  $('#f_config').value = JSON.stringify(EXAMPLE, null, 2)
-  body.querySelectorAll('.item').forEach(el => el.onclick = async () => {
-    const tpl = await api('/api/templates/' + el.dataset.id)
-    $('#f_config').value = JSON.stringify({ name: tpl.name, displayName: tpl.display_name, form: tpl.form, flow: tpl.flow }, null, 2)
-    window.scrollTo(0, document.body.scrollHeight)
-  })
-  $('#btn_gen').onclick = async () => {
-    const sentence = $('#f_sentence').value.trim()
-    if (!sentence) return toast('先输入一句话描述')
-    const btn = $('#btn_gen')
-    btn.textContent = '生成中…（最长约 1 分钟）'
-    btn.disabled = true
-    try {
-      const { config } = await api('/api/ai/generate-template', { method: 'POST', body: { sentence } })
-      $('#f_config').value = JSON.stringify(config, null, 2)
-      toast('已生成，请检查 assignee 后保存')
-      $('#f_config').scrollIntoView({ behavior: 'smooth' })
-    } catch (e) { toast(e.message) } finally {
-      btn.textContent = '生成模板'
-      btn.disabled = false
-    }
-  }
-  $('#btn_save').onclick = async () => {
-    try {
-      let cfg = JSON.parse($('#f_config').value)
-      await api('/api/templates', { method: 'POST', body: cfg })
-      toast('已保存')
-      renderManage()
-    } catch (e) { toast(e.message) }
-  }
+    <div class="card">${list.map(t =>
+      `<div class="item"><div><div class="title">${esc(t.display_name)}${t.created_by === me.phone ? ' <span class="badge">我的</span>' : ''}</div><div class="sub">${esc(t.name)} · ${t.form.length} 个字段</div></div>
+       <span style="display:flex;gap:8px"><span class="badge" style="cursor:pointer" data-edit="${t.id}">画布编辑</span></span></div>`).join('') || '<div class="empty">暂无模板</div>'}</div>`
+  body.querySelectorAll('[data-edit]').forEach(el => el.onclick = () => { location = '/editor.html?tpl=' + el.dataset.edit })
 }
 
 async function renderInstancesTab(body) {

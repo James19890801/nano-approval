@@ -1,0 +1,339 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>流程编辑器 · 轻审批</title>
+<link rel="stylesheet" href="/vendor/index.css">
+<style>
+  :root { --primary:#2563eb; --bg:#f3f4f6; --panel:#fff; --text:#111827; --muted:#6b7280; --line:#e5e7eb; --agent:#7c3aed; --danger:#dc2626; }
+  * { box-sizing:border-box; margin:0; padding:0; }
+  body { font-family:-apple-system,BlinkMacSystemFont,"PingFang SC",sans-serif; background:var(--bg); color:var(--text); overflow:hidden; height:100vh; display:flex; flex-direction:column; }
+  header { display:flex; align-items:center; gap:12px; padding:10px 16px; background:var(--panel); border-bottom:1px solid var(--line); }
+  header input { border:1px solid var(--line); border-radius:8px; padding:7px 10px; font-size:14px; }
+  #tpl_key { width:150px } #tpl_name { width:180px }
+  .spacer { flex:1 }
+  .btn { border:none; border-radius:8px; padding:8px 18px; font-size:14px; font-weight:600; cursor:pointer; }
+  .btn.primary { background:var(--primary); color:#fff }
+  .btn.ghost { background:#fff; color:var(--primary); border:1px solid var(--primary) }
+  .btn.danger { background:#fff; color:var(--danger); border:1px solid var(--danger) }
+  main { flex:1; display:flex; min-height:0 }
+  .left, .right { width:250px; flex-shrink:0; background:var(--panel); border-right:1px solid var(--line); display:flex; flex-direction:column; overflow-y:auto; }
+  .right { border-right:none; border-left:1px solid var(--line); }
+  .panel-title { font-size:13px; font-weight:700; color:var(--muted); padding:12px 14px 6px; letter-spacing:.05em }
+  .compo { margin:6px 12px; padding:12px 14px; border:1px dashed var(--line); border-radius:10px; cursor:grab; font-size:14px; display:flex; align-items:center; gap:10px; background:#fafafa; user-select:none; }
+  .compo:hover { border-color:var(--primary); color:var(--primary) }
+  .compo .dot { width:10px; height:10px; border-radius:3px; background:var(--primary) }
+  .compo.agent .dot { background:var(--agent); border-radius:50% }
+  .canvas-wrap { flex:1; min-width:0; position:relative }
+  #canvas { position:absolute; inset:0 }
+  .hint { position:absolute; top:10px; left:50%; transform:translateX(-50%); background:rgba(17,24,39,.75); color:#fff; padding:6px 14px; border-radius:99px; font-size:12px; z-index:5; pointer-events:none }
+  /* 属性面板 */
+  .prop { padding:10px 14px; font-size:14px }
+  .prop label { display:block; margin-bottom:10px; font-size:13px; color:var(--text) }
+  .prop input, .prop select, .prop textarea { width:100%; border:1px solid var(--line); border-radius:8px; padding:8px 10px; font-size:14px; margin-top:4px }
+  .ai-box { padding:10px 14px }
+  .ai-box textarea { width:100%; border:1px solid var(--line); border-radius:10px; padding:10px; font-size:14px; resize:none }
+  .ai-tip { font-size:12px; color:var(--muted); margin:6px 0 }
+  .field { border:1px solid var(--line); border-radius:10px; padding:10px; margin:8px 12px; background:#fff }
+  .field .row { display:flex; gap:6px; margin-bottom:6px }
+  .field input, .field select { flex:1; border:1px solid var(--line); border-radius:6px; padding:6px 8px; font-size:13px; min-width:0 }
+  .field .mini { flex:0 0 auto; padding:6px 8px; font-size:12px; background:none; border:1px solid var(--line); border-radius:6px; cursor:pointer }
+  .chk { font-size:12px; display:flex; align-items:center; gap:4px; color:var(--muted) }
+  .opts input { margin-top:6px }
+  .toolbar { display:flex; gap:8px; padding:0 12px 10px }
+  .toolbar .btn { padding:6px 12px; font-size:13px }
+  .empty-prop { color:var(--muted); font-size:13px; padding:20px 16px; text-align:center }
+  .lf-node-snaker\\:task .lf-basic-shape { fill:#dbeafe; stroke:#2563eb; }
+  .lf-node-snaker\\:custom .lf-basic-shape { fill:#ede9fe; stroke:#7c3aed; }
+  .lf-node-snaker\\:start .lf-basic-shape, .lf-node-snaker\\:end .lf-basic-shape { fill:#d1fae5; stroke:#059669; }
+  .toast { position:fixed; left:50%; transform:translateX(-50%); bottom:26px; background:rgba(17,24,39,.92); color:#fff; padding:10px 20px; border-radius:99px; font-size:14px; opacity:0; transition:.25s; pointer-events:none; z-index:99 }
+  .toast.show { opacity:1 }
+  .badge-agent { font-size:11px; color:var(--agent); font-weight:700 }
+</style>
+</head>
+<body>
+<header>
+  <button class="btn ghost" onclick="location='/'">← 返回</button>
+  <input id="tpl_key" placeholder="英文标识(如 leave)">
+  <input id="tpl_name" placeholder="流程名称(如 请假审批)">
+  <span class="spacer"></span>
+  <span id="save_state" style="font-size:12px;color:var(--muted)"></span>
+  <button class="btn primary" id="btn_save">保存流程</button>
+</header>
+<main>
+  <aside class="left">
+    <div class="panel-title">组件（拖入画布）</div>
+    <div class="compo" data-type="snaker:task"><span class="dot"></span>审批节点（人工）</div>
+    <div class="compo agent" data-type="snaker:custom"><span class="dot"></span>智能体节点</div>
+    <div class="panel-title">表单字段</div>
+    <div id="fields"></div>
+    <div style="padding:4px 12px 14px"><button class="btn ghost" style="width:100%" id="btn_add_field">＋ 添加字段</button></div>
+  </aside>
+  <div class="canvas-wrap">
+    <div id="canvas"></div>
+    <div class="hint">拖入组件 → 从节点边缘拖出连线 · 点击节点在右侧配置属性</div>
+  </div>
+  <aside class="right">
+    <div class="panel-title">AI 一句话生成</div>
+    <div class="ai-box">
+      <textarea id="ai_input" rows="3" placeholder="例：报销申请，填写金额和事由，先由报销初审员智能体自动审批，再财务审批"></textarea>
+      <div class="ai-tip">生成结果直接落到画布，可继续拖拽调整。你配置的智能体会被自动匹配。</div>
+      <button class="btn primary" style="width:100%" id="btn_ai">✦ 生成</button>
+    </div>
+    <div class="panel-title">节点属性</div>
+    <div id="prop" class="empty-prop">点击画布中的节点进行配置</div>
+  </aside>
+</main>
+<div class="toast" id="toast"></div>
+
+<script src="/vendor/index.min.js"></script>
+<script>
+const $ = s => document.querySelector(s)
+const qs = new URLSearchParams(location.search)
+const params = { tplId: qs.get('tpl') }
+let users = [], agents = [], tplData = null
+
+function toast(msg) { const t = $('#toast'); t.textContent = msg; t.classList.add('show'); setTimeout(() => t.classList.remove('show'), 2500) }
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))
+async function api(path, opts = {}) {
+  const res = await fetch(path, { headers: { 'Content-Type': 'application/json' }, ...opts, body: opts.body ? JSON.stringify(opts.body) : undefined })
+  const data = await res.json().catch(() => ({}))
+  if (!res.ok) throw new Error(data.error || ('HTTP ' + res.status))
+  return data
+}
+
+// ── LogicFlow 画布 ──
+// UMD 全局名是 Core（2.x）
+const { LogicFlow, RectNode, RectNodeModel, CircleNode, CircleNodeModel } = window.Core
+
+class TaskModel extends RectNodeModel { initNodeData(d) { super.initNodeData(d); this.width = 150; this.height = 48; this.radius = 8 } }
+class CircleModel extends CircleNodeModel { initNodeData(d) { super.initNodeData(d); this.r = 28 } }
+
+const lf = new LogicFlow({
+  container: $('#canvas'),
+  grid: { size: 14, visible: true, type: 'dot' },
+  background: { color: '#fafbfc' },
+  keyboard: { enabled: true },
+  edgeType: 'polyline',
+})
+
+lf.register({ type: 'snaker:task', view: RectNode, model: TaskModel })
+lf.register({ type: 'snaker:custom', view: RectNode, model: TaskModel })
+lf.register({ type: 'snaker:start', view: CircleNode, model: CircleModel })
+lf.register({ type: 'snaker:end', view: CircleNode, model: CircleModel })
+
+// 初始画布：start → apply → end
+try {
+  lf.render({
+    nodes: [
+      { id: 'start', type: 'snaker:start', x: 120, y: 200, properties: {}, text: '开始' },
+      { id: 'apply', type: 'snaker:task', x: 320, y: 200, properties: { assignee: 'applicant' }, text: '发起申请' },
+      { id: 'end', type: 'snaker:end', x: 560, y: 200, properties: {}, text: '结束' },
+    ],
+    edges: [
+      { id: 'e1', sourceNodeId: 'start', targetNodeId: 'apply', properties: {} },
+      { id: 'e2', sourceNodeId: 'apply', targetNodeId: 'end', properties: {} },
+    ],
+  })
+} catch (e) { window.__lfErr = String(e.message); console.error(e) }
+window.lf = lf
+
+// 组件拖拽
+document.querySelectorAll('.compo').forEach(el => {
+  el.addEventListener('mousedown', (e) => {
+    e.preventDefault()
+    const isAgent = el.classList.contains('agent')
+    lf.dnd.startDrag({
+      type: el.dataset.type,
+      text: isAgent ? '智能体' : '审批节点',
+      properties: isAgent ? { clazz: 'qca_agent' } : { assignee: '13800000000' },
+    })
+  })
+})
+
+// ── 属性面板 ──
+let selected = null
+lf.on('node:click,edge:click', ({ data }) => { selected = data; renderProp() })
+lf.on('blank:click', () => { selected = null; renderProp() })
+
+function userOptions(selectedPhone) {
+  return users.map(u => `<option value="${u.phone}" ${u.phone === selectedPhone ? 'selected' : ''}>${esc(u.name)}（${u.phone}）</option>`).join('')
+}
+function agentOptions(selectedId) {
+  return `<option value="">（选择智能体）</option>` + agents.map(a =>
+    `<option value="${a.id}" ${a.id === selectedId ? 'selected' : ''}>${esc(a.name)} · ${a.mode === 'auto' ? '自动' : '辅助'}${a.synced ? '' : ' · 未同步'}</option>`).join('')
+}
+
+function renderProp() {
+  const p = $('#prop')
+  if (!selected) { p.className = 'empty-prop'; p.innerHTML = '点击画布中的节点进行配置'; return }
+  p.className = 'prop'
+  if (selected.type === 'snaker:task' || selected.type === 'snaker:custom') {
+    const props = selected.properties || {}
+    const isAgent = selected.type === 'snaker:custom' || props.clazz === 'qca_agent'
+    p.innerHTML = `
+      <label>节点名称<input id="p_text" value="${esc(selected.text?.value ?? selected.text ?? '')}"></label>
+      ${isAgent ? `
+        <label>智能体<select id="p_agent">${agentOptions(props.agentId)}</select></label>
+        <label>执行策略（覆盖智能体默认）
+          <select id="p_amode">
+            <option value="">跟随智能体配置</option>
+            <option value="assist" ${props.agentMode === 'assist' ? 'selected' : ''}>辅助（仅出意见）</option>
+            <option value="auto" ${props.agentMode === 'auto' ? 'selected' : ''}>自动审批</option>
+          </select>
+        </label>
+        <div class="ai-tip">自动审批时，节点后将自动插入隐藏的 auto_agent 审批节点（保存时生成）。</div>
+      ` : `
+        <label>审批人<select id="p_assignee"><option value="applicant" ${props.assignee === 'applicant' ? 'selected' : ''}>发起人本人</option>${userOptions(props.assignee)}</select></label>
+      `}
+      <div class="toolbar">
+        <button class="btn danger" id="p_del">删除节点</button>
+      </div>`
+    $('#p_text').oninput = (e) => lf.graphModel.getNodeModelById(selected.id).updateText(e.target.value)
+    if (isAgent) {
+      $('#p_agent').onchange = (e) => { setProp(selected.id, { agentId: e.target.value }) ; const ag = agents.find(a => a.id === e.target.value); if (ag) $('#p_text').value = ag.name, lf.graphModel.getNodeModelById(selected.id).updateText(ag.name) }
+      $('#p_amode').onchange = (e) => setProp(selected.id, { agentMode: e.target.value })
+    } else {
+      $('#p_assignee').onchange = (e) => setProp(selected.id, { assignee: e.target.value })
+    }
+    $('#p_del').onclick = () => { lf.deleteNode(selected.id); selected = null; renderProp() }
+  } else {
+    p.innerHTML = `<div class="empty-prop">开始/结束节点无需配置</div><div class="toolbar"><button class="btn danger" id="p_del">删除节点</button></div>`
+    $('#p_del').onclick = () => { lf.deleteNode(selected.id); selected = null; renderProp() }
+  }
+}
+function setProp(id, patch) {
+  const model = lf.graphModel.getNodeModelById(id)
+  const props = { ...(model.properties || {}), ...patch }
+  model.setProperties(props)
+  selected = { ...selected, properties: props }
+}
+
+// ── 表单字段设计器 ──
+let formFields = []
+const FIELD_TYPES = [['text', '单行文本'], ['textarea', '多行文本'], ['number', '数字'], ['select', '下拉选择'], ['date', '日期']]
+function renderFields() {
+  const box = $('#fields')
+  box.innerHTML = formFields.map((f, i) => `
+    <div class="field" data-i="${i}">
+      <div class="row">
+        <input class="f_label" value="${esc(f.label)}" placeholder="字段名">
+        <select class="f_type">${FIELD_TYPES.map(([v, l]) => `<option value="${v}" ${f.type === v ? 'selected' : ''}>${l}</option>`).join('')}</select>
+      </div>
+      <div class="row" style="align-items:center">
+        <label class="chk"><input type="checkbox" class="f_req" ${f.required ? 'checked' : ''}>必填</label>
+        <span class="spacer" style="flex:1"></span>
+        <button class="mini" data-up="${i}">↑</button><button class="mini" data-down="${i}">↓</button><button class="mini" data-del="${i}">✕</button>
+      </div>
+      ${f.type === 'select' ? `<input class="f_opts" value="${esc((f.options || []).join(','))}" placeholder="选项，逗号分隔">` : ''}
+    </div>`).join('')
+  box.querySelectorAll('.f_label').forEach(el => el.oninput = () => formFields[+el.closest('.field').dataset.i].label = el.value)
+  box.querySelectorAll('.f_type').forEach(el => el.onchange = () => { formFields[+el.closest('.field').dataset.i].type = el.value; renderFields() })
+  box.querySelectorAll('.f_req').forEach(el => el.onchange = () => formFields[+el.closest('.field').dataset.i].required = el.checked)
+  box.querySelectorAll('.f_opts').forEach(el => el.oninput = () => formFields[+el.closest('.field').dataset.i].options = el.value.split(/[,，]/).map(s => s.trim()).filter(Boolean))
+  box.querySelectorAll('[data-del]').forEach(el => el.onclick = () => { formFields.splice(+el.dataset.del, 1); renderFields() })
+  box.querySelectorAll('[data-up]').forEach(el => el.onclick = () => { const i = +el.dataset.up; if (i > 0) [formFields[i - 1], formFields[i]] = [formFields[i], formFields[i - 1]]; renderFields() })
+  box.querySelectorAll('[data-down]').forEach(el => el.onclick = () => { const i = +el.dataset.down; if (i < formFields.length - 1) [formFields[i + 1], formFields[i]] = [formFields[i], formFields[i + 1]]; renderFields() })
+}
+$('#btn_add_field').onclick = () => { formFields.push({ key: 'f' + Date.now().toString(36).slice(-4), label: '', type: 'text', required: false }); renderFields() }
+
+// ── AI 生成 ──
+$('#btn_ai').onclick = async () => {
+  const sentence = $('#ai_input').value.trim()
+  if (!sentence) return toast('先输入一句话描述')
+  const btn = $('#btn_ai')
+  btn.disabled = true; btn.textContent = '生成中…'
+  try {
+    const { config } = await api('/api/ai/generate-template', { method: 'POST', body: { sentence } })
+    $('#tpl_key').value = config.name
+    $('#tpl_name').value = config.displayName
+    formFields = config.form.map(f => ({ ...f }))
+    renderFields()
+    lf.render(normalizeFlow(config.flow))
+    // 自动审批的智能体节点后插入隐藏 auto 节点
+    ensureAutoNodes()
+    toast('已生成到画布，继续拖拽调整后保存')
+  } catch (e) { toast(e.message) } finally { btn.disabled = false; btn.textContent = '✦ 生成' }
+}
+
+function normalizeFlow(flow) {
+  return {
+    nodes: (flow.nodes || []).map(n => ({
+      id: n.id, type: n.type, x: n.x ?? 200, y: n.y ?? 200,
+      properties: n.properties || {}, text: n.text?.value ?? n.text ?? '',
+    })),
+    edges: (flow.edges || []).map(e => ({
+      id: e.id, sourceNodeId: e.sourceNodeId, targetNodeId: e.targetNodeId, properties: {},
+    })),
+  }
+}
+
+// auto 模式智能体节点后补 auto_agent 隐藏节点
+function ensureAutoNodes() {
+  const graph = lf.getGraphData()
+  const agentNodes = graph.nodes.filter(n => (n.properties?.clazz === 'qca_agent') && nodeMode(n) === 'auto')
+  let n = 0
+  for (const an of agentNodes) {
+    const out = graph.edges.filter(e => e.sourceNodeId === an.id)
+    const next = out[0] && graph.nodes.find(x => x.id === out[0].targetNodeId)
+    const already = next && next.properties?.assignee === 'auto_agent'
+    if (already) continue
+    const anchor = lf.graphModel.getNodeModelById(an.id)
+    const autoId = 'auto_' + (++n) + '_' + Date.now().toString(36).slice(-4)
+    lf.addNode({
+      id: autoId, type: 'snaker:task', x: (anchor?.x ?? 200) + 200, y: anchor?.y ?? 200,
+      properties: { assignee: 'auto_agent' }, text: '智能体审批(自动)',
+    })
+    // 重连：agent → auto → 原下一节点
+    for (const e of out) {
+      lf.addEdge({ sourceNodeId: autoId, targetNodeId: e.targetNodeId })
+      lf.deleteEdge(e.id)
+    }
+    lf.addEdge({ sourceNodeId: an.id, targetNodeId: autoId })
+  }
+}
+function nodeMode(n) {
+  if (n.properties?.agentMode) return n.properties.agentMode
+  const ag = agents.find(a => a.id === n.properties?.agentId)
+  return ag?.mode ?? 'assist'
+}
+
+// ── 保存 ──
+$('#btn_save').onclick = async () => {
+  const name = $('#tpl_key').value.trim()
+  const displayName = $('#tpl_name').value.trim()
+  if (!name || !displayName) return toast('请填写流程标识和名称')
+  formFields.forEach((f, i) => { if (!f.key) f.key = 'f' + i + '_' + Date.now().toString(36).slice(-4) })
+  if (formFields.some(f => !f.label)) return toast('有表单字段未填写名称')
+  ensureAutoNodes()
+  const graph = lf.getGraphData()
+  const flow = {
+    nodes: graph.nodes.map(n => ({ id: n.id, type: n.type, x: n.x, y: n.y, properties: n.properties || {}, text: { value: typeof n.text === 'object' ? n.text?.value : n.text } })),
+    edges: graph.edges.map(e => ({ id: e.id, sourceNodeId: e.sourceNodeId, targetNodeId: e.targetNodeId, properties: {} })),
+  }
+  try {
+    await api('/api/templates', { method: 'POST', body: { name, displayName, form: formFields, flow } })
+    toast('已保存，可在首页发起')
+    setTimeout(() => location = '/', 900)
+  } catch (e) { toast(e.message) }
+}
+
+// ── 初始化：用户/智能体/已有模板 ──
+(async () => {
+  try { users = await api('/api/users') } catch {}
+  try { agents = await api('/api/agents') } catch {}
+  if (params.tplId) {
+    try {
+      tplData = await api('/api/templates/' + params.tplId)
+      $('#tpl_key').value = tplData.name
+      $('#tpl_name').value = tplData.display_name
+      formFields = tplData.form.map(f => ({ ...f }))
+      renderFields()
+      lf.render(normalizeFlow(tplData.flow))
+    } catch (e) { toast(e.message) }
+  }
+  renderFields()
+})()
+</script>
+</body>
+</html>

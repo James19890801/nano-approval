@@ -12,6 +12,7 @@ import { generateTemplate, qcaConfigured, syncAgentToQca } from './src/qca/index
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const app = express()
 app.use(express.json())
+app.use('/vendor', express.static(path.join(__dirname, 'node_modules', '@logicflow', 'core', 'dist')))
 app.use(express.static(path.join(__dirname, 'public')))
 
 const COOKIE = 'sid'
