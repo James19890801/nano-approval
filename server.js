@@ -81,12 +81,22 @@ app.post('/api/ai/generate-template', requireLogin, async (req, res) => {
   }
 })
 
-// ── 智能体：用户维护快照（提示词 + skills），同步到 QCA ─────────────────────
+// ── 智能体：用户维护快照（提示词 + skills + 模式 + 工具/MCP），同步到 QCA ───
+const AGENT_TOOLS = ['WebFetch', 'WebSearch', 'Bash', 'Read', 'Write', 'Edit', 'Glob', 'Grep']
+
 function agentRowFromBody(body, ownerPhone, existing) {
   const name = String(body.name || '').trim()
   const systemPrompt = String(body.systemPrompt || '').trim()
   if (!name) throw new Error('请填写智能体名称')
   if (!systemPrompt) throw new Error('请填写提示词')
+  const mode = body.mode === 'auto' ? 'auto' : 'assist'
+  const tools = (Array.isArray(body.tools) ? body.tools : [])
+    .map((t) => String(t))
+    .filter((t) => AGENT_TOOLS.includes(t))
+  const mcpServers = (Array.isArray(body.mcpServers) ? body.mcpServers : [])
+    .map((m) => ({ name: String(m.name || '').trim(), url: String(m.url || '').trim() }))
+    .filter((m) => m.name && /^https?:\/\//.test(m.url))
+    .slice(0, 10)
   const existingSkills = existing ? (JSON.parse(existing.skills_json || '[]') || []) : []
   const skills = (Array.isArray(body.skills) ? body.skills : [])
     .map((s) => ({
@@ -106,6 +116,9 @@ function agentRowFromBody(body, ownerPhone, existing) {
     description: String(body.description || '').trim(),
     system_prompt: systemPrompt,
     skills,
+    mode,
+    tools,
+    mcpServers,
   }
 }
 
@@ -113,6 +126,7 @@ function agentView(a) {
   return {
     id: a.id, name: a.name, description: a.description, systemPrompt: a.system_prompt,
     skills: JSON.parse(a.skills_json || '[]'),
+    mode: a.mode, tools: JSON.parse(a.tools_json || '[]'), mcpServers: JSON.parse(a.mcp_json || '[]'),
     synced: Boolean(a.qca_agent_id), qcaAgentId: a.qca_agent_id, qcaVersion: a.qca_version,
     syncNote: a.sync_note, syncError: a.sync_error, syncedAt: a.synced_at, updatedAt: a.updated_at,
   }
@@ -137,6 +151,17 @@ app.get('/api/agents/:id', requireLogin, (req, res) => {
   const a = q.findAgent(req.params.id)
   if (!a || a.owner_phone !== req.user.phone) return res.status(404).json({ error: '智能体不存在' })
   res.json(agentView(a))
+})
+
+// 侧边栏用：任何登录用户可读智能体身份信息（不含提示词全文）
+app.get('/api/agents/:id/view', requireLogin, (req, res) => {
+  const a = q.findAgent(req.params.id)
+  if (!a) return res.status(404).json({ error: '智能体不存在' })
+  res.json({
+    id: a.id, name: a.name, description: a.description, mode: a.mode,
+    skills: (JSON.parse(a.skills_json || '[]') || []).map((s) => s.title),
+    synced: Boolean(a.qca_agent_id), qcaVersion: a.qca_version,
+  })
 })
 
 app.put('/api/agents/:id', requireLogin, (req, res) => {
@@ -255,7 +280,7 @@ app.get('/api/my-instances', requireLogin, async (req, res) => {
 app.get('/api/instances/:id', requireLogin, async (req, res) => {
   const detail = await instanceDetail(req.params.id)
   if (!detail) return res.status(404).json({ error: '实例不存在' })
-  const { inst, history, doing, form, aiNotes } = detail
+  const { inst, history, doing, form, aiNotes, aiDecisions, agentInfo } = detail
   const stateText = { 10: '进行中', 20: '已通过', 30: '已撤回', 40: '已终止', 45: '已拒绝', 99: '已废弃' }
   res.json({
     id: inst.id,
@@ -269,13 +294,15 @@ app.get('/api/instances/:id', requireLogin, async (req, res) => {
     history: history.map((t) => ({
       id: t.id, displayName: t.displayName, taskName: t.taskName,
       operator: t.operator, actorIds: t.actorIds,
-      actorNames: (t.actorIds || []).map((p) => q.findUser(p)?.name ?? p).join('、'),
+      actorNames: (t.actorIds || []).map((p) => p === 'auto_agent' ? '智能体(自动)' : (q.findUser(p)?.name ?? p)).join('、'),
       taskState: t.taskState, finishTime: t.finishTime,
       comment: aiNotes[t.taskName] ?? t.variables?.tf_approvalComment ?? '',
+      decision: aiDecisions[t.taskName] ?? null,
+      agent: agentInfo[t.taskName] ?? null,
     })),
     doing: doing.map((t) => ({
       id: t.id, displayName: t.displayName, actorIds: t.actorIds,
-      actorNames: (t.actorIds || []).map((p) => q.findUser(p)?.name ?? p).join('、'),
+      actorNames: (t.actorIds || []).map((p) => p === 'auto_agent' ? '智能体(自动)' : (q.findUser(p)?.name ?? p)).join('、'),
       createTime: t.createTime,
     })),
   })

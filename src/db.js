@@ -120,6 +120,9 @@ CREATE TABLE IF NOT EXISTS agents (
   description TEXT,
   system_prompt TEXT NOT NULL,
   skills_json TEXT NOT NULL DEFAULT '[]',
+  mode TEXT NOT NULL DEFAULT 'assist',
+  tools_json TEXT NOT NULL DEFAULT '[]',
+  mcp_json TEXT NOT NULL DEFAULT '[]',
   snapshot_hash TEXT,
   qca_agent_id TEXT,
   qca_version INTEGER,
@@ -129,7 +132,25 @@ CREATE TABLE IF NOT EXISTS agents (
   created_at TEXT,
   updated_at TEXT
 );
+CREATE TABLE IF NOT EXISTS ai_notes (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  instance_id TEXT NOT NULL,
+  node_id TEXT NOT NULL,
+  text TEXT NOT NULL,
+  decision TEXT,
+  created_at TEXT
+);
 `)
+
+// 存量库迁移：CREATE IF NOT EXISTS 不会补列，逐个兜底加
+for (const ddl of [
+  "ALTER TABLE agents ADD COLUMN mode TEXT NOT NULL DEFAULT 'assist'",
+  "ALTER TABLE agents ADD COLUMN tools_json TEXT NOT NULL DEFAULT '[]'",
+  "ALTER TABLE agents ADD COLUMN mcp_json TEXT NOT NULL DEFAULT '[]'",
+  "ALTER TABLE ai_notes ADD COLUMN decision TEXT",
+]) {
+  try { db.prepare(ddl).run() } catch { /* 列已存在 */ }
+}
 
 export const q = {
   upsertUser(phone, name) {
@@ -177,13 +198,13 @@ export const q = {
     return db.prepare('SELECT * FROM agents WHERE owner_phone = ? AND name = ?').get(ownerPhone, name)
   },
   insertAgent(a) {
-    db.prepare(`INSERT INTO agents (id, owner_phone, name, description, system_prompt, skills_json, created_at, updated_at)
-      VALUES (?,?,?,?,?,?,?,?)`)
-      .run(a.id, a.owner_phone, a.name, a.description ?? '', a.system_prompt, JSON.stringify(a.skills ?? []), new Date().toISOString(), new Date().toISOString())
+    db.prepare(`INSERT INTO agents (id, owner_phone, name, description, system_prompt, skills_json, mode, tools_json, mcp_json, created_at, updated_at)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?)`)
+      .run(a.id, a.owner_phone, a.name, a.description ?? '', a.system_prompt, JSON.stringify(a.skills ?? []), a.mode ?? 'assist', JSON.stringify(a.tools ?? []), JSON.stringify(a.mcpServers ?? []), new Date().toISOString(), new Date().toISOString())
   },
   updateAgent(a) {
-    db.prepare(`UPDATE agents SET name=?, description=?, system_prompt=?, skills_json=?, updated_at=? WHERE id=?`)
-      .run(a.name, a.description ?? '', a.system_prompt, JSON.stringify(a.skills ?? []), new Date().toISOString(), a.id)
+    db.prepare(`UPDATE agents SET name=?, description=?, system_prompt=?, skills_json=?, mode=?, tools_json=?, mcp_json=?, updated_at=? WHERE id=?`)
+      .run(a.name, a.description ?? '', a.system_prompt, JSON.stringify(a.skills ?? []), a.mode ?? 'assist', JSON.stringify(a.tools ?? []), JSON.stringify(a.mcpServers ?? []), new Date().toISOString(), a.id)
   },
   updateAgentSync(id, fields) {
     const sets = Object.keys(fields).map((k) => `${k}=?`).join(', ')

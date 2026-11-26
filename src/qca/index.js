@@ -90,7 +90,10 @@ flow 节点规范（按顺序线性排列，除非用户明确要求分支）：
 3. 若用户提到 AI 初审/智能审核，加一个 { "id": "ai", "type": "snaker:custom", "properties": { "clazz": "ai_review", "val": "aiOpinion" }, "text": { "value": "AI 初审" } }
 4. 每个审批人一个节点：{ "id": "approve1", "type": "snaker:task", "properties": { "assignee": "审批人手机号" }, "text": { "value": "XX审批" } }
    用户没有给出手机号时，assignee 填 "13800000000" 占位，并在 text 里带上审批人称呼。
-5. { "id": "end", "type": "snaker:end", "properties": {}, "text": { "value": "结束" } }
+5. 智能体节点后如果该智能体是自动审批模式（auto），必须紧跟一个隐藏审批节点：
+   { "id": "auto1", "type": "snaker:task", "properties": { "assignee": "auto_agent" }, "text": { "value": "智能体审批" } }
+   该节点由平台按智能体判定自动通过/驳回，人工待办不可见。
+6. { "id": "end", "type": "snaker:end", "properties": {}, "text": { "value": "结束" } }
 
 edges 按节点顺序连接：{ "id": "e1", "sourceNodeId": "start", "targetNodeId": "apply", "properties": {} }
 
@@ -219,8 +222,8 @@ export async function generateTemplate(sentence, agents = []) {
   const binding = await ensureBinding()
   let prompt = sentence
   if (agents.length > 0) {
-    const list = agents.map((a) => `- id=${a.id} 名称「${a.name}」 职责：${(a.description || a.system_prompt || '').slice(0, 80)}`).join('\n')
-    prompt += `\n\n用户已配置以下智能体（若描述中的某环节与其职责匹配，插入节点 { "type": "snaker:custom", "properties": { "clazz": "qca_agent", "agentId": "<该id>", "val": "agentOpinion" }, "text": { "value": "<智能体名>" } }）：\n${list}`
+    const list = agents.map((a) => `- id=${a.id} 名称「${a.name}」 模式：${a.mode === 'auto' ? '自动审批' : '辅助'} 职责：${(a.description || a.system_prompt || '').slice(0, 80)}`).join('\n')
+    prompt += `\n\n用户已配置以下智能体（若描述中的某环节与其职责匹配，插入节点 { "type": "snaker:custom", "properties": { "clazz": "qca_agent", "agentId": "<该id>", "val": "agentOpinion" }, "text": { "value": "<智能体名>" } }；自动审批模式的智能体其后必须再插入 assignee 为 "auto_agent" 的隐藏审批节点）：\n${list}`
   }
   const session = await cloud.request('/api/v1/cloud/sessions', {
     method: 'POST',
@@ -247,8 +250,10 @@ export async function generateTemplate(sentence, agents = []) {
 function snapshotHash(agent) {
   const skills = (JSON.parse(agent.skills_json || '[]') || [])
     .map((s) => [s.title, s.content])
+  const tools = JSON.parse(agent.tools_json || '[]')
+  const mcp = JSON.parse(agent.mcp_json || '[]').map((m) => [m.name, m.url])
   return crypto.createHash('sha256')
-    .update(JSON.stringify([agent.name, agent.description, agent.system_prompt, skills]))
+    .update(JSON.stringify([agent.name, agent.description, agent.system_prompt, agent.mode, skills, tools, mcp]))
     .digest('hex')
 }
 
@@ -323,6 +328,18 @@ export async function syncAgentToQca(agent) {
     system,
     description: agent.description ?? '',
     metadata: { app: APP_SCOPE, hostAgentId: agent.id, owner: agent.owner_phone },
+  }
+  // 工具集与 MCP 服务器：让 skill 具备调接口/调 MCP 的能力
+  const tools = JSON.parse(agent.tools_json || '[]')
+  if (Array.isArray(tools) && tools.length > 0) {
+    body.tools = [{ type: 'agent_toolset_20260401', enabled_tools: tools.slice(0, 20) }]
+  }
+  const mcp = JSON.parse(agent.mcp_json || '[]')
+  if (Array.isArray(mcp) && mcp.length > 0) {
+    body.mcp_servers = mcp
+      .filter((m) => m.name && m.url && /^https?:\/\//.test(m.url))
+      .slice(0, 20)
+      .map((m) => ({ type: 'url', name: m.name, url: m.url }))
   }
   if (bindings.length > 0) body.skills = bindings
   let res
