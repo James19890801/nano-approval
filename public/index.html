@@ -101,13 +101,13 @@ async function renderHome() {
   app.innerHTML = `
     <div class="header">
       <h1 style="margin:0">轻审批</h1>
-      <div><span class="who">${esc(me.name)}</span> · <a href="javascript:void 0" id="lnk_tpl">配置</a> · <a href="javascript:void 0" id="lnk_out">退出</a></div>
+      <div><span class="who">${esc(me.name)}</span> · <a href="javascript:void 0" id="lnk_tpl">管理</a> · <a href="javascript:void 0" id="lnk_out">退出</a></div>
     </div>
     <div class="tabs">${TABS.map(t => `<div class="tab ${t.key === tab ? 'active' : ''}" data-tab="${t.key}">${t.label}</div>`).join('')}</div>
     <div id="tab_body"><div class="empty">加载中…</div></div>`
   document.querySelectorAll('.tab').forEach(el => el.onclick = () => { tab = el.dataset.tab; renderHome() })
   $('#lnk_out').onclick = async () => { await api('/api/logout', { method: 'POST' }); me = null; renderLogin() }
-  $('#lnk_tpl').onclick = () => { location.hash = '#templates' }
+  $('#lnk_tpl').onclick = () => { location.hash = '#manage' }
   try {
     const body = $('#tab_body')
     if (tab === 'start') {
@@ -217,50 +217,129 @@ async function renderDetail(instanceId) {
   }
 }
 
-// ── 模板配置（V1 手动 JSON；V2 由一句话生成）──
-const EXAMPLE = {
-  name: "leave",
-  displayName: "请假审批",
-  form: [
-    { key: "days", label: "请假天数", type: "number", required: true },
-    { key: "reason", label: "事由", type: "textarea", required: true }
-  ],
-  flow: {
-    nodes: [
-      { id: "start", type: "snaker:start", x: 100, y: 200, properties: {}, text: { value: "开始" } },
-      { id: "apply", type: "snaker:task", x: 200, y: 200, properties: { assignee: "applicant" }, text: { value: "发起申请" } },
-      { id: "approve", type: "snaker:task", x: 300, y: 200, properties: { assignee: "13800000002" }, text: { value: "主管审批" } },
-      { id: "end", type: "snaker:end", x: 400, y: 200, properties: {}, text: { value: "结束" } }
-    ],
-    edges: [
-      { id: "e1", sourceNodeId: "start", targetNodeId: "apply", properties: {} },
-      { id: "e2", sourceNodeId: "apply", targetNodeId: "approve", properties: {} },
-      { id: "e3", sourceNodeId: "approve", targetNodeId: "end", properties: {} }
-    ]
-  }
-}
+// ── 管理界面：流程 / 实例 / 智能体 ──
+let manageTab = 'agents'
+const MANAGE_TABS = [
+  { key: 'agents', label: '智能体' },
+  { key: 'flows', label: '流程' },
+  { key: 'instances', label: '实例' },
+]
 
-async function renderTemplates() {
-  const list = await api('/api/templates')
+async function renderManage() {
   app.innerHTML = `
     <a class="back" href="#home">← 返回</a>
-    <h1>模板配置</h1>
+    <h1 style="margin-bottom:12px">管理</h1>
+    <div class="tabs">${MANAGE_TABS.map(t => `<div class="tab ${t.key === manageTab ? 'active' : ''}" data-mtab="${t.key}">${t.label}</div>`).join('')}</div>
+    <div id="m_body"><div class="empty">加载中…</div></div>`
+  document.querySelectorAll('.tab[data-mtab]').forEach(el => el.onclick = () => { manageTab = el.dataset.mtab; renderManage() })
+  const body = $('#m_body')
+  try {
+    if (manageTab === 'agents') await renderAgentsTab(body)
+    else if (manageTab === 'flows') await renderFlowsTab(body)
+    else await renderInstancesTab(body)
+  } catch (e) { body.innerHTML = `<div class="empty">${esc(e.message)}</div>` }
+}
+
+async function renderAgentsTab(body) {
+  const list = await api('/api/agents')
+  body.innerHTML = `
+    ${list.map(a => `
+      <div class="card">
+        <div style="display:flex;justify-content:space-between;align-items:center">
+          <div><div class="title" style="font-weight:600">${esc(a.name)}</div>
+          <div class="sub" style="color:var(--muted);font-size:13px">${esc(a.description || '')}</div></div>
+          <span class="badge ${a.synced ? 'done' : ''}">${a.synced ? '已同步 v' + a.qcaVersion : '未同步'}</span>
+        </div>
+        ${a.syncNote ? `<div class="sub" style="font-size:12px;color:var(--muted);margin-top:6px">${esc(a.syncNote)}</div>` : ''}
+        ${a.syncError ? `<div class="sub" style="font-size:12px;color:var(--danger);margin-top:6px">${esc(a.syncError)}</div>` : ''}
+        <div style="display:flex;gap:8px;margin-top:10px">
+          <button class="btn ghost" style="flex:1" data-edit="${a.id}">编辑</button>
+          <button class="btn" style="flex:1" data-sync="${a.id}" data-name="${esc(a.name)}">同步到 QCA</button>
+          <button class="btn danger" style="flex:0 0 64px" data-del="${a.id}">删除</button>
+        </div>
+      </div>`).join('') || '<div class="empty">还没有智能体，先新建一个</div>'}
+    <div class="card">
+      <h3 style="font-size:15px;margin-bottom:10px">新建 / 编辑智能体</h3>
+      <label class="field">名称<input id="ag_name" placeholder="如：报销初审员"></label>
+      <label class="field">职责描述<input id="ag_desc" placeholder="一句话职责，供一句话生成时匹配"></label>
+      <label class="field">系统提示词<textarea id="ag_prompt" rows="6" placeholder="你是……，负责……，输出……"></textarea></label>
+      <div style="font-size:13px;font-weight:600;margin:6px 0 8px">Skills（Markdown 指令，同步时上传 QCA）</div>
+      <div id="ag_skills"></div>
+      <button class="btn ghost" id="ag_add_skill" style="margin:6px 0">＋ 添加 skill</button>
+      <button class="btn" id="ag_save">保存</button>
+      <input type="hidden" id="ag_id">
+    </div>`
+  const editingId = { v: null }
+  const skillRow = (s = { title: '', content: '' }) => {
+    const div = document.createElement('div')
+    div.className = 'card'
+    div.style.padding = '10px'
+    div.innerHTML = `<label class="field" style="margin-bottom:6px">标题<input class="sk_title" value="${esc(s.title)}" placeholder="如：报销规范"></label>
+      <label class="field" style="margin-bottom:0">内容<textarea class="sk_content" rows="3" placeholder="Markdown 指令">${esc(s.content)}</textarea></label>`
+    return div
+  }
+  const loadEditor = (a) => {
+    editingId.v = a?.id ?? null
+    $('#ag_id').value = editingId.v ?? ''
+    $('#ag_name').value = a?.name ?? ''
+    $('#ag_desc').value = a?.description ?? ''
+    $('#ag_prompt').value = a?.systemPrompt ?? ''
+    $('#ag_skills').innerHTML = ''
+    ;(a?.skills ?? []).forEach(s => $('#ag_skills').appendChild(skillRow(s)))
+  }
+  body.querySelectorAll('[data-edit]').forEach(el => el.onclick = async () => loadEditor(await api('/api/agents/' + el.dataset.edit)))
+  body.querySelectorAll('[data-sync]').forEach(el => el.onclick = async () => {
+    el.textContent = '同步中…'; el.disabled = true
+    try {
+      const r = await api(`/api/agents/${el.dataset.sync}/sync`, { method: 'POST' })
+      toast('已同步：' + (r.note || `v${r.qca_version}`))
+      renderManage()
+    } catch (e) { toast(e.message); el.textContent = '同步到 QCA'; el.disabled = false }
+  })
+  body.querySelectorAll('[data-del]').forEach(el => el.onclick = async () => {
+    if (!confirm('删除该智能体？流程中引用它的节点将失效')) return
+    await api(`/api/agents/${el.dataset.del}`, { method: 'DELETE' })
+    toast('已删除'); renderManage()
+  })
+  $('#ag_add_skill').onclick = () => $('#ag_skills').appendChild(skillRow())
+  $('#ag_save').onclick = async () => {
+    const skills = [...document.querySelectorAll('#ag_skills > .card')].map(d => ({
+      title: d.querySelector('.sk_title').value.trim(),
+      content: d.querySelector('.sk_content').value.trim(),
+    })).filter(s => s.title && s.content)
+    const payload = {
+      name: $('#ag_name').value, description: $('#ag_desc').value,
+      systemPrompt: $('#ag_prompt').value, skills,
+    }
+    try {
+      if (editingId.v) await api(`/api/agents/${editingId.v}`, { method: 'PUT', body: payload })
+      else { const r = await api('/api/agents', { method: 'POST', body: payload }); editingId.v = r.id }
+      toast('已保存，注意同步到 QCA 后才在流程中生效')
+      renderManage()
+    } catch (e) { toast(e.message) }
+  }
+  loadEditor(null)
+}
+
+async function renderFlowsTab(body) {
+  const list = await api('/api/templates')
+  body.innerHTML = `
     <div class="card">${list.map(t =>
-      `<div class="item" data-id="${t.id}"><div><div class="title">${esc(t.display_name)}</div><div class="sub">${esc(t.name)}</div></div><span class="badge">编辑</span></div>`).join('') || '<div class="empty">暂无模板</div>'}</div>
+      `<div class="item" data-id="${t.id}"><div><div class="title">${esc(t.display_name)}${t.created_by === me.phone ? ' <span class="badge">我的</span>' : ''}</div><div class="sub">${esc(t.name)} · ${t.form.length} 个表单项</div></div><span class="badge">编辑</span></div>`).join('') || '<div class="empty">暂无模板</div>'}</div>
     <div class="card">
       <h3 style="font-size:15px;margin-bottom:8px">AI 一句话生成</h3>
-      <p style="font-size:12px;color:var(--muted);margin-bottom:8px">描述你要的审批（如：出差报销，先部门主管审，再财务审），生成后请检查 assignee 手机号再保存。</p>
+      <p style="font-size:12px;color:var(--muted);margin-bottom:8px">描述你要的审批（如：出差报销，先部门主管审，再财务审），你配置的智能体会被自动匹配插入。生成后请检查 assignee 手机号再保存。</p>
       <input id="f_sentence" placeholder="一句话描述审批流程">
       <button class="btn ghost" id="btn_gen" style="margin-top:10px">生成模板</button>
     </div>
     <div class="card">
       <h3 style="font-size:15px;margin-bottom:8px">新建 / 更新（JSON）</h3>
-      <p style="font-size:12px;color:var(--muted);margin-bottom:8px">assignee 填审批人手机号（写死）或变量名；AI 节点：type 用 snaker:custom、clazz 用 ai_review。</p>
+      <p style="font-size:12px;color:var(--muted);margin-bottom:8px">assignee 填审批人手机号（写死）或变量名；智能体节点：type 用 snaker:custom、clazz 用 qca_agent、agentId 填管理页里的智能体 id。</p>
       <textarea class="config" id="f_config"></textarea>
       <button class="btn" id="btn_save" style="margin-top:10px">保存模板</button>
     </div>`
   $('#f_config').value = JSON.stringify(EXAMPLE, null, 2)
-  document.querySelectorAll('.item').forEach(el => el.onclick = async () => {
+  body.querySelectorAll('.item').forEach(el => el.onclick = async () => {
     const tpl = await api('/api/templates/' + el.dataset.id)
     $('#f_config').value = JSON.stringify({ name: tpl.name, displayName: tpl.display_name, form: tpl.form, flow: tpl.flow }, null, 2)
     window.scrollTo(0, document.body.scrollHeight)
@@ -286,9 +365,48 @@ async function renderTemplates() {
       let cfg = JSON.parse($('#f_config').value)
       await api('/api/templates', { method: 'POST', body: cfg })
       toast('已保存')
-      renderTemplates()
+      renderManage()
     } catch (e) { toast(e.message) }
   }
+}
+
+async function renderInstancesTab(body) {
+  const rows = await api('/api/instances')
+  const stateText = { 10: '进行中', 20: '已通过', 30: '已撤回', 40: '已终止', 45: '已拒绝', 99: '已废弃' }
+  const cls = s => s === 20 ? 'done' : s === 45 ? 'reject' : s === 10 ? 'doing' : ''
+  body.innerHTML = rows.length ? `<div class="card">${rows.map(r =>
+    `<div class="item" data-id="${r.id}"><div><div class="title">${esc(r.define_display_name || r.id)}</div><div class="sub">发起人 ${esc(r.operator)} · ${fmtTime(r.create_time)}</div></div><span class="badge ${cls(r.state)}">${stateText[r.state] || r.state}</span></div>`).join('')}</div>`
+    : '<div class="empty">还没有实例</div>'
+  body.querySelectorAll('.item').forEach(el => el.onclick = () => { location.hash = '#detail/' + el.dataset.id })
+}
+
+// 流程 JSON 编辑器的示例
+const EXAMPLE = {
+  name: "leave",
+  displayName: "请假审批",
+  form: [
+    { key: "days", label: "请假天数", type: "number", required: true },
+    { key: "reason", label: "事由", type: "textarea", required: true }
+  ],
+  flow: {
+    nodes: [
+      { id: "start", type: "snaker:start", x: 100, y: 200, properties: {}, text: { value: "开始" } },
+      { id: "apply", type: "snaker:task", x: 200, y: 200, properties: { assignee: "applicant" }, text: { value: "发起申请" } },
+      { id: "approve", type: "snaker:task", x: 300, y: 200, properties: { assignee: "13800000002" }, text: { value: "主管审批" } },
+      { id: "end", type: "snaker:end", x: 400, y: 200, properties: {}, text: { value: "结束" } }
+    ],
+    edges: [
+      { id: "e1", sourceNodeId: "start", targetNodeId: "apply", properties: {} },
+      { id: "e2", sourceNodeId: "apply", targetNodeId: "approve", properties: {} },
+      { id: "e3", sourceNodeId: "approve", targetNodeId: "end", properties: {} }
+    ]
+  }
+}
+
+async function renderTemplates() {
+  location.hash = '#manage'
+  manageTab = 'flows'
+  return renderManage()
 }
 
 // ── 路由 ──
@@ -300,7 +418,7 @@ async function route() {
   const [page, param] = hash.split('/')
   if (page === 'apply' && param) return renderApply(param).catch(showErr)
   if (page === 'detail' && param) return renderDetail(param).catch(showErr)
-  if (page === 'templates') return renderTemplates().catch(showErr)
+  if (page === 'manage' || page === 'templates') return renderManage().catch(showErr)
   tab = 'start'; renderHome()
 }
 function showErr(e) { app.innerHTML = `<div class="empty">${esc(e.message)}</div>` }

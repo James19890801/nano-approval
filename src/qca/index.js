@@ -1,7 +1,8 @@
 import fs from 'node:fs'
 import path from 'node:path'
-import { fileURLToPath } from 'node:url'
 import crypto from 'node:crypto'
+import { fileURLToPath } from 'node:url'
+import AdmZip from 'adm-zip'
 import { createCloudAgentsClient, ensureCloudResources } from './cloud-agents.mjs'
 import { db } from '../db.js'
 
@@ -97,14 +98,36 @@ form 的字段从用户的描述里提取，够用即可，不要超过 6 个。
 
 let bindingPromise = null
 
+async function pickModel() {
+  const models = await cloud.request('/api/v1/cloud/models')
+  const list = (models?.data ?? []).filter((m) => m?.is_enabled)
+  const model = (list.find((m) => /高级|Pro/i.test(m.display_name ?? '')) ?? list[0])?.id
+  if (!model) throw new Error('QCA 无可用模型')
+  return model
+}
+
+// 全平台共享一个云端 Environment（cloud 类型，session 级隔离）
+let envPromise = null
+async function ensureEnvironment() {
+  if (envPromise) return envPromise
+  envPromise = (async () => {
+    const found = await cloud.findResources('environments', { app: APP_SCOPE, purpose: 'runtime' })
+    if (found.length > 0) return found[0].id
+    const env = await cloud.request('/api/v1/cloud/environments', {
+      method: 'POST',
+      body: { name: 'nano-approval runtime', config: { type: 'cloud' }, metadata: { app: APP_SCOPE, purpose: 'runtime' } },
+    })
+    if (!env?.id) throw new Error('QCA 环境创建失败')
+    return env.id
+  })()
+  return envPromise
+}
+
 async function ensureBinding() {
   if (!qcaConfigured()) throw new Error('QCA 未配置：请复制 qca.env.example 为 data/qca.env 并填入 QODER_PAT')
   if (bindingPromise) return bindingPromise
   bindingPromise = (async () => {
-    const models = await cloud.request('/api/v1/cloud/models')
-    const list = (models?.data ?? []).filter((m) => m?.is_enabled)
-    const model = (list.find((m) => /高级|Pro/i.test(m.display_name ?? '')) ?? list[0])?.id
-    if (!model) throw new Error('QCA 无可用模型')
+    const model = await pickModel()
     return ensureCloudResources({
       client: cloud,
       coordinator,
@@ -191,8 +214,14 @@ function validateTemplateConfig(config) {
 }
 
 // 一句话 → 模板配置 JSON（未经入库，由用户确认后保存）
-export async function generateTemplate(sentence) {
+// agents：调用者已配置的智能体清单，供生成器插入 qca_agent 节点
+export async function generateTemplate(sentence, agents = []) {
   const binding = await ensureBinding()
+  let prompt = sentence
+  if (agents.length > 0) {
+    const list = agents.map((a) => `- id=${a.id} 名称「${a.name}」 职责：${(a.description || a.system_prompt || '').slice(0, 80)}`).join('\n')
+    prompt += `\n\n用户已配置以下智能体（若描述中的某环节与其职责匹配，插入节点 { "type": "snaker:custom", "properties": { "clazz": "qca_agent", "agentId": "<该id>", "val": "agentOpinion" }, "text": { "value": "<智能体名>" } }）：\n${list}`
+  }
   const session = await cloud.request('/api/v1/cloud/sessions', {
     method: 'POST',
     body: { ...binding, title: '模板生成', metadata: { app: APP_SCOPE, purpose: 'tpl-gen' } },
@@ -200,7 +229,7 @@ export async function generateTemplate(sentence) {
   if (!session?.id) throw new Error('QCA 会话创建失败')
   await cloud.request(`/api/v1/cloud/sessions/${session.id}/events`, {
     method: 'POST',
-    body: { events: [{ type: 'user.message', content: [{ type: 'text', text: sentence }] }] },
+    body: { events: [{ type: 'user.message', content: [{ type: 'text', text: prompt }] }] },
   })
   const reply = await waitForReply(session.id)
   const config = extractJson(reply)
@@ -211,4 +240,143 @@ export async function generateTemplate(sentence) {
     throw err
   }
   return config
+}
+
+// ── 用户智能体：快照（提示词 + skills）→ QCA Cloud Agent ───────────────────
+
+function snapshotHash(agent) {
+  const skills = (JSON.parse(agent.skills_json || '[]') || [])
+    .map((s) => [s.title, s.content])
+  return crypto.createHash('sha256')
+    .update(JSON.stringify([agent.name, agent.description, agent.system_prompt, skills]))
+    .digest('hex')
+}
+
+function skillSlug(title) {
+  const slug = String(title).toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, '')
+  return slug || 'skill'
+}
+
+function skillZipBuffer(title, content) {
+  const slug = skillSlug(title)
+  const md = `---\nname: ${slug}\ndescription: ${title}\n---\n\n# ${title}\n\n${content}\n`
+  const zip = new AdmZip()
+  zip.addFile(`${slug}/SKILL.md`, Buffer.from(md, 'utf8'))
+  return zip.toBuffer()
+}
+
+// multipart/raw 通道：官方客户端只白名单 JSON 路径，skills 走这里。
+// latest_version 是 16 位 epoch 微秒数（>2^53），JSON.parse 会丢精度，
+// 必须从原始文本按字符串提取；创建版本响应里的 id 是 skillver_（版本 id），
+// 不能当 skill id 用。
+async function rawSkillCall(url, { method = 'GET', buffer } = {}) {
+  if (!qcaConfigured()) throw new Error('QCA 未配置')
+  let body
+  const headers = { Authorization: `Bearer ${PAT}` }
+  if (buffer !== undefined) {
+    const form = new FormData()
+    form.append('files', new Blob([buffer], { type: 'application/zip' }), 'skill.zip')
+    body = form
+  }
+  const res = await fetch(new URL(url, QCA_ORIGIN), { method, headers, body })
+  const text = await res.text()
+  if (!res.ok) throw new Error(`skill 请求失败(${res.status})`)
+  return {
+    id: text.match(/"id"\s*:\s*"([^"]+)"/)?.[1],
+    latest_version: text.match(/"latest_version"\s*:\s*"?(\d+)"?/)?.[1],
+  }
+}
+
+export async function syncAgentToQca(agent) {
+  if (!qcaConfigured()) throw new Error('QCA 未配置：请复制 qca.env.example 为 data/qca.env 并填入 QODER_PAT')
+  const model = await pickModel()
+  const skills = JSON.parse(agent.skills_json || '[]') || []
+  const notes = []
+  const bindings = []
+  let system = agent.system_prompt
+  for (const s of skills) {
+    if (!s.title || !s.content) continue
+    try {
+      const buffer = skillZipBuffer(s.title, s.content)
+      if (s.qca_skill_id) {
+        await rawSkillCall(`/api/v1/cloud/skills/${s.qca_skill_id}/versions`, { method: 'POST', buffer })
+      } else {
+        const created = await rawSkillCall('/api/v1/cloud/skills', { method: 'POST', buffer })
+        if (!/^skill_/.test(created.id ?? '')) throw new Error('响应缺少 skill id')
+        s.qca_skill_id = created.id
+      }
+      // 回查详情拿最新版本号，绑定钉住刚上传的版本
+      const detail = await rawSkillCall(`/api/v1/cloud/skills/${s.qca_skill_id}`)
+      s.qca_version = detail.latest_version
+      if (!s.qca_skill_id || !s.qca_version) throw new Error('缺少 id/version')
+      bindings.push({ type: 'custom', skill_id: s.qca_skill_id, version: String(s.qca_version) })
+      notes.push(`skill「${s.title}」已上传云端`)
+    } catch (e) {
+      // 云端 Skills 未开通/配额不足时降级：内容并入 system 提示词
+      system += `\n\n# 技能：${s.title}\n${s.content}`
+      notes.push(`skill「${s.title}」以内联提示词生效`)
+    }
+  }
+  const body = {
+    name: `nano-approval/${agent.name}`.slice(0, 256),
+    model,
+    system,
+    description: agent.description ?? '',
+    metadata: { app: APP_SCOPE, hostAgentId: agent.id, owner: agent.owner_phone },
+  }
+  if (bindings.length > 0) body.skills = bindings
+  let res
+  if (agent.qca_agent_id) {
+    const bodyWithVersion = { ...body, version: agent.qca_version }
+    try {
+      res = await cloud.request(`/api/v1/cloud/agents/${agent.qca_agent_id}`, { method: 'POST', body: bodyWithVersion })
+    } catch (err) {
+      // OCC 版本落后（例如云端被其它途径更新过）：拉当前版本重试一次
+      if (err.code !== 'ai_conflict') throw err
+      const current = await cloud.request(`/api/v1/cloud/agents/${agent.qca_agent_id}`)
+      res = await cloud.request(`/api/v1/cloud/agents/${agent.qca_agent_id}`, {
+        method: 'POST',
+        body: { ...bodyWithVersion, version: current?.version },
+      })
+    }
+  } else {
+    res = await cloud.request('/api/v1/cloud/agents', {
+      method: 'POST',
+      body,
+      idempotencyKey: `nano-agent-${agent.id}`,
+    })
+  }
+  if (!res?.id || !Number.isInteger(res.version)) throw new Error('QCA Agent 同步失败')
+  db.prepare(`UPDATE agents SET qca_agent_id=?, qca_version=?, skills_json=?, snapshot_hash=?, sync_note=?, sync_error=NULL, synced_at=? WHERE id=?`)
+    .run(res.id, res.version, JSON.stringify(skills), snapshotHash(agent), notes.join('；'), new Date().toISOString(), agent.id)
+  return { qca_agent_id: res.id, qca_version: res.version, note: notes.join('；') }
+}
+
+// 快照有漂移（用户改了提示词/skill 未同步）时执行前自动对账
+export async function ensureAgentSynced(agent) {
+  if (!agent.qca_agent_id || agent.snapshot_hash !== snapshotHash(agent)) {
+    return syncAgentToQca(agent)
+  }
+  return { qca_agent_id: agent.qca_agent_id, qca_version: agent.qca_version }
+}
+
+// 用某个用户智能体处理一次请求（每次新建 Session，钉当前 Agent 版本）
+export async function askAgent(agent, userText, { timeoutMs = 150000 } = {}) {
+  const binding = await ensureAgentSynced(agent)
+  const environmentId = await ensureEnvironment()
+  const session = await cloud.request('/api/v1/cloud/sessions', {
+    method: 'POST',
+    body: {
+      agent: { type: 'agent', id: binding.qca_agent_id, version: binding.qca_version },
+      environment_id: environmentId,
+      title: `节点执行 ${agent.name}`,
+      metadata: { app: APP_SCOPE, purpose: 'agent-node', hostAgentId: agent.id },
+    },
+  })
+  if (!session?.id) throw new Error('QCA 会话创建失败')
+  await cloud.request(`/api/v1/cloud/sessions/${session.id}/events`, {
+    method: 'POST',
+    body: { events: [{ type: 'user.message', content: [{ type: 'text', text: userText }] }] },
+  })
+  return waitForReply(session.id, { timeoutMs })
 }

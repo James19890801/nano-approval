@@ -113,6 +113,22 @@ CREATE TABLE IF NOT EXISTS qca_bindings (
   token TEXT,
   updated_at TEXT
 );
+CREATE TABLE IF NOT EXISTS agents (
+  id TEXT PRIMARY KEY,
+  owner_phone TEXT NOT NULL,
+  name TEXT NOT NULL,
+  description TEXT,
+  system_prompt TEXT NOT NULL,
+  skills_json TEXT NOT NULL DEFAULT '[]',
+  snapshot_hash TEXT,
+  qca_agent_id TEXT,
+  qca_version INTEGER,
+  sync_note TEXT,
+  sync_error TEXT,
+  synced_at TEXT,
+  created_at TEXT,
+  updated_at TEXT
+);
 `)
 
 export const q = {
@@ -150,5 +166,30 @@ export const q = {
   updateTemplate(t) {
     db.prepare(`UPDATE templates SET name=?, display_name=?, form_json=?, flow_json=?, updated_at=? WHERE id=?`)
       .run(t.name, t.display_name, t.form_json, t.flow_json, new Date().toISOString(), t.id)
+  },
+  listAgents(ownerPhone) {
+    return db.prepare('SELECT * FROM agents WHERE owner_phone = ? ORDER BY created_at DESC').all(ownerPhone)
+  },
+  findAgent(id) {
+    return db.prepare('SELECT * FROM agents WHERE id = ?').get(id)
+  },
+  findAgentByName(ownerPhone, name) {
+    return db.prepare('SELECT * FROM agents WHERE owner_phone = ? AND name = ?').get(ownerPhone, name)
+  },
+  insertAgent(a) {
+    db.prepare(`INSERT INTO agents (id, owner_phone, name, description, system_prompt, skills_json, created_at, updated_at)
+      VALUES (?,?,?,?,?,?,?,?)`)
+      .run(a.id, a.owner_phone, a.name, a.description ?? '', a.system_prompt, JSON.stringify(a.skills ?? []), new Date().toISOString(), new Date().toISOString())
+  },
+  updateAgent(a) {
+    db.prepare(`UPDATE agents SET name=?, description=?, system_prompt=?, skills_json=?, updated_at=? WHERE id=?`)
+      .run(a.name, a.description ?? '', a.system_prompt, JSON.stringify(a.skills ?? []), new Date().toISOString(), a.id)
+  },
+  updateAgentSync(id, fields) {
+    const sets = Object.keys(fields).map((k) => `${k}=?`).join(', ')
+    db.prepare(`UPDATE agents SET ${sets} WHERE id=?`).run(...Object.values(fields), id)
+  },
+  deleteAgent(id) {
+    db.prepare('DELETE FROM agents WHERE id=?').run(id)
   },
 }

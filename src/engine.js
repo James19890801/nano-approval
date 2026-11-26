@@ -2,6 +2,7 @@ import { EngineImpl, HandlerRegistry } from '@mldong/jeeflow'
 import { JdbcRepository, TsIDGenerator } from '@mldong/jeeflow/jdbc'
 import { SqliteAdapter } from './sqlite-adapter.js'
 import { db, q } from './db.js'
+import { askAgent, ensureAgentSynced, qcaConfigured } from './qca/index.js'
 
 export const repo = new JdbcRepository(new SqliteAdapter(db), new TsIDGenerator())
 
@@ -26,6 +27,37 @@ registry.registerCustom('ai_review', {
     const opinion = days <= 3
       ? `[AI初审] 请假 ${days} 天（${form.reason ?? ''}）。规则占位意见：在阈值内，建议通过。`
       : `[AI初审] 请假 ${days} 天（${form.reason ?? ''}）。规则占位意见：超过 3 天，建议人工重点复核。`
+    db.prepare('INSERT INTO ai_notes (instance_id, node_id, text, created_at) VALUES (?,?,?,?)')
+      .run(inst.id, node.id, opinion, new Date().toISOString())
+    return opinion
+  },
+})
+
+// 用户智能体节点：流程 JSON 里 type=snaker:custom、properties.clazz='qca_agent'、
+// properties.agentId=宿主侧智能体 id（管理界面维护）。执行时按快照哈希自动同步到 QCA，
+// 表单变量发给该智能体，意见落 ai_notes 供时间线展示。
+registry.registerCustom('qca_agent', {
+  async handle(node, inst, operator, vars) {
+    const agentId = node.properties?.agentId
+    const agent = agentId ? q.findAgent(agentId) : null
+    if (!agent) {
+      db.prepare('INSERT INTO ai_notes (instance_id, node_id, text, created_at) VALUES (?,?,?,?)')
+        .run(inst.id, node.id, `[智能体] 配置错误：找不到 agentId=${agentId}`, new Date().toISOString())
+      return `[智能体配置错误：${agentId}]`
+    }
+    const form = Object.fromEntries(
+      Object.entries(vars ?? {}).filter(([k]) => !k.startsWith('tf_') && !k.startsWith('u_'))
+    )
+    const task = `${node.text?.value ?? agent.name}`
+    const prompt = `审批流程节点「${task}」收到一份申请，请按你的职责处理并给出意见。\n表单数据：${JSON.stringify(form)}\n请直接输出处理意见（一两段话）。`
+    let opinion
+    try {
+      if (!qcaConfigured()) throw new Error('QCA 未配置')
+      await ensureAgentSynced(agent)
+      opinion = await askAgent(agent, prompt)
+    } catch (err) {
+      opinion = `[${agent.name}] 执行失败：${String(err.message || err).slice(0, 200)}`
+    }
     db.prepare('INSERT INTO ai_notes (instance_id, node_id, text, created_at) VALUES (?,?,?,?)')
       .run(inst.id, node.id, opinion, new Date().toISOString())
     return opinion
@@ -83,6 +115,16 @@ export function listDone(phone) {
 
 export function listMyInstances(phone) {
   return repo.pageInstances(1, 100, phone).then((r) => r.rows)
+}
+
+// 管理端查阅：全部实例（绕过归属过滤，直查引擎表）
+export function listAllInstances() {
+  return db.prepare(`
+    SELECT i.id, i.state, i.operator, i.create_time,
+           d.display_name AS define_display_name
+    FROM wf_process_instance i
+    LEFT JOIN wf_process_define d ON d.id = i.process_define_id
+    ORDER BY i.create_time DESC LIMIT 200`).all()
 }
 
 export async function instanceDetail(instanceId) {

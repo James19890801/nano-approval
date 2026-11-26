@@ -5,9 +5,9 @@ import { fileURLToPath } from 'node:url'
 import { db, q } from './src/db.js'
 import {
   deployTemplate, startInstance, agree, reject,
-  listTodo, listDone, listMyInstances, instanceDetail,
+  listTodo, listDone, listMyInstances, listAllInstances, instanceDetail,
 } from './src/engine.js'
-import { generateTemplate, qcaConfigured } from './src/qca/index.js'
+import { generateTemplate, qcaConfigured, syncAgentToQca } from './src/qca/index.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const app = express()
@@ -74,11 +74,104 @@ app.post('/api/ai/generate-template', requireLogin, async (req, res) => {
   if (!sentence) return res.status(400).json({ error: '请描述你要的审批流程' })
   if (!qcaConfigured()) return res.status(503).json({ error: 'QCA 未配置：复制 qca.env.example 为 data/qca.env 并填入 QODER_PAT' })
   try {
-    const config = await generateTemplate(sentence)
+    const config = await generateTemplate(sentence, q.listAgents(req.user.phone))
     res.json({ config })
   } catch (err) {
     res.status(502).json({ error: String(err.message || err).slice(0, 300) })
   }
+})
+
+// ── 智能体：用户维护快照（提示词 + skills），同步到 QCA ─────────────────────
+function agentRowFromBody(body, ownerPhone, existing) {
+  const name = String(body.name || '').trim()
+  const systemPrompt = String(body.systemPrompt || '').trim()
+  if (!name) throw new Error('请填写智能体名称')
+  if (!systemPrompt) throw new Error('请填写提示词')
+  const existingSkills = existing ? (JSON.parse(existing.skills_json || '[]') || []) : []
+  const skills = (Array.isArray(body.skills) ? body.skills : [])
+    .map((s) => ({
+      title: String(s.title || '').trim(),
+      content: String(s.content || '').trim(),
+    }))
+    .filter((s) => s.title && s.content)
+    .slice(0, 10)
+    .map((s) => {
+      const prev = existingSkills.find((o) => o.title === s.title && o.qca_skill_id)
+      return prev ? { ...s, qca_skill_id: prev.qca_skill_id, qca_version: prev.qca_version } : s
+    })
+  return {
+    id: existing?.id ?? 'agt_' + crypto.randomBytes(6).toString('hex'),
+    owner_phone: ownerPhone,
+    name,
+    description: String(body.description || '').trim(),
+    system_prompt: systemPrompt,
+    skills,
+  }
+}
+
+function agentView(a) {
+  return {
+    id: a.id, name: a.name, description: a.description, systemPrompt: a.system_prompt,
+    skills: JSON.parse(a.skills_json || '[]'),
+    synced: Boolean(a.qca_agent_id), qcaAgentId: a.qca_agent_id, qcaVersion: a.qca_version,
+    syncNote: a.sync_note, syncError: a.sync_error, syncedAt: a.synced_at, updatedAt: a.updated_at,
+  }
+}
+
+app.get('/api/agents', requireLogin, (req, res) => {
+  res.json(q.listAgents(req.user.phone).map(agentView))
+})
+
+app.post('/api/agents', requireLogin, (req, res) => {
+  try {
+    const agent = agentRowFromBody(req.body, req.user.phone)
+    if (q.findAgentByName(req.user.phone, agent.name)) return res.status(409).json({ error: '同名智能体已存在' })
+    q.insertAgent(agent)
+    res.json({ id: agent.id })
+  } catch (err) {
+    res.status(400).json({ error: String(err.message || err) })
+  }
+})
+
+app.get('/api/agents/:id', requireLogin, (req, res) => {
+  const a = q.findAgent(req.params.id)
+  if (!a || a.owner_phone !== req.user.phone) return res.status(404).json({ error: '智能体不存在' })
+  res.json(agentView(a))
+})
+
+app.put('/api/agents/:id', requireLogin, (req, res) => {
+  try {
+    const a = q.findAgent(req.params.id)
+    if (!a || a.owner_phone !== req.user.phone) return res.status(404).json({ error: '智能体不存在' })
+    q.updateAgent(agentRowFromBody(req.body, req.user.phone, a))
+    res.json({ ok: true })
+  } catch (err) {
+    res.status(400).json({ error: String(err.message || err) })
+  }
+})
+
+app.delete('/api/agents/:id', requireLogin, (req, res) => {
+  const a = q.findAgent(req.params.id)
+  if (!a || a.owner_phone !== req.user.phone) return res.status(404).json({ error: '智能体不存在' })
+  q.deleteAgent(a.id)
+  res.json({ ok: true })
+})
+
+app.post('/api/agents/:id/sync', requireLogin, async (req, res) => {
+  const a = q.findAgent(req.params.id)
+  if (!a || a.owner_phone !== req.user.phone) return res.status(404).json({ error: '智能体不存在' })
+  try {
+    const result = await syncAgentToQca(a)
+    res.json(result)
+  } catch (err) {
+    q.updateAgentSync(a.id, { sync_error: String(err.message || err).slice(0, 300) })
+    res.status(502).json({ error: String(err.message || err).slice(0, 300) })
+  }
+})
+
+// ── 管理端：全部流程实例（查阅用） ─────────────────────────────────────────
+app.get('/api/instances', requireLogin, (req, res) => {
+  res.json(listAllInstances())
 })
 
 function tplFromConfig(config, createdBy) {
@@ -101,7 +194,7 @@ function tplFromConfig(config, createdBy) {
 app.get('/api/templates', requireLogin, (req, res) => {
   res.json(q.listTemplates().map((t) => ({
     id: t.id, name: t.name, display_name: t.display_name,
-    form: JSON.parse(t.form_json),
+    form: JSON.parse(t.form_json), created_by: t.created_by,
   })))
 })
 

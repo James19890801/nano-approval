@@ -73,6 +73,18 @@ npm start
 
 `data/` 已被 .gitignore 排除，PAT 不会进入仓库。
 
+## 用户智能体（管理 → 智能体）
+
+每个用户在管理界面维护自己的智能体**快照**：系统提示词 + 若干 skills（Markdown 指令）。保存后同步到 QCA（全平台共用一枚 PAT，用户无感知）：
+
+- 提示词 → QCA Agent 的 `system`
+- skill → 打包成 zip（SKILL.md）上传 `/api/v1/cloud/skills`，Agent 绑定时**钉住版本**（云端 Skills 不可用时自动降级为提示词内联）
+- 更新快照 → QCA Agent 版本自动递增（OCC，落后时自愈重试）；流程节点执行前按快照哈希自动对账，漂移即同步
+
+流程中引用：`{ "type": "snaker:custom", "properties": { "clazz": "qca_agent", "agentId": "<管理页的 agt_xxx>", "val": "agentOpinion" } }`。一句话生成也会根据你的智能体职责描述自动匹配插入。智能体按用户隔离（只能管理自己的），执行时表单变量发给该智能体，意见落在审批时间线。
+
+管理界面（首页右上角「管理」）包含：智能体 / 流程（我创建的模板 + 一句话生成 + JSON 编辑）/ 实例（全部实例查阅）。
+
 ## 接入 AI（下一步路线）
 
 1. **AI 初审节点**：替换 `src/engine.js` 里 `ai_review` 处理器的占位实现为 QCA 调用（入参已含完整表单变量）
